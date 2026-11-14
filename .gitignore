@@ -1,0 +1,265 @@
+# Solv .gitignore
+#
+# Deliberately broad. This repository is public, and it will hold a service that
+# handles three provider API keys plus untrusted counterparty payloads. The hard
+# prohibitions this file enforces are listed in AGENTS.md.
+#
+# Two things are intentionally NOT ignored:
+#   Cargo.lock      - committed on purpose; CI runs `cargo test --locked`
+#   static/app.css  - the compiled Tailwind output is committed so that
+#                     `cargo build` needs no Node toolchain (docs/DESIGN.md §6)
+
+# ---------------------------------------------------------------------------
+# Secrets and credentials  (the highest-stakes section; see AGENTS.md)
+# ---------------------------------------------------------------------------
+
+# Environment files. .env.example is the only one that may ever be committed.
+.env
+.env.*
+!.env.example
+
+# Private keys, certificates, keystores
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.der
+*.csr
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+*.ppk
+
+# Credential files by convention
+secrets.*
+credentials.*
+secret.*
+*secrets.json
+*credentials.json
+service-account*.json
+gha-creds-*.json
+.netrc
+_netrc
+.npmrc
+.yarnrc
+.pypirc
+.htpasswd
+
+# Cloud and infrastructure credentials
+.aws/
+.gcloud/
+.azure/
+.kube/
+*.tfvars
+*.tfvars.json
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+.vault-token
+
+# Provider-specific local state
+.wrangler/
+.fly/
+.vercel/
+.netlify/
+
+# ---------------------------------------------------------------------------
+# Solv runtime state
+# ---------------------------------------------------------------------------
+# These snapshots contain service_description text from untrusted counterparties
+# and must never reach a public repository (docs/SPEC.md §5.6).
+
+solv_state.json
+solv_state.json.tmp
+*.state.json
+ci_state.json
+/data/
+/receipts/
+
+# ---------------------------------------------------------------------------
+# Rust
+# ---------------------------------------------------------------------------
+
+/target/
+target/
+**/*.rs.bk
+*.pdb
+*.orig
+
+# Coverage and profiling
+*.profraw
+*.profdata
+/coverage/
+tarpaulin-report.*
+lcov.info
+
+# Benchmarks and flamegraphs
+/criterion/
+perf.data
+perf.data.old
+flamegraph.svg
+*.folded
+
+# Local build caches
+.sccache/
+
+# ---------------------------------------------------------------------------
+# Frontend / Node
+# ---------------------------------------------------------------------------
+
+node_modules/
+.pnp
+.pnp.*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.output/
+.next/
+.nuxt/
+.svelte-kit/
+.astro/
+.docusaurus/
+
+# Bundler and tooling caches
+.vite/
+.parcel-cache/
+.turbo/
+.rollup.cache/
+.swc/
+*.tsbuildinfo
+
+# Linter and test caches
+.eslintcache
+.stylelintcache
+.nyc_output/
+/playwright-report/
+/test-results/
+
+# Package manager debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Tailwind intermediate output. The committed build is static/app.css; any other
+# generated stylesheet is an artifact.
+static/*.css
+!static/app.css
+tailwind.output.css
+
+# ---------------------------------------------------------------------------
+# Python (tooling and scratch scripts only; Solv itself is Rust)
+# ---------------------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------------
+# Editors and IDEs
+# ---------------------------------------------------------------------------
+
+.idea/
+.vscode/
+.fleet/
+.zed/
+*.iml
+*.swp
+*.swo
+*.swn
+*~
+tags
+TAGS
+
+# ---------------------------------------------------------------------------
+# Operating systems
+# ---------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.fseventsd
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# ---------------------------------------------------------------------------
+# Local AI tooling state
+# ---------------------------------------------------------------------------
+# CLAUDE.md and AGENTS.md at the repository root ARE tracked. Only per-machine
+# overrides and local agent scratch state are ignored.
+
+.claude/settings.local.json
+.claude/scratch/
+CLAUDE.local.md
+AGENTS.local.md
+.aider*
+.continue/
+.codeium/
+
+# ---------------------------------------------------------------------------
+# Logs, temporary files, archives
+# ---------------------------------------------------------------------------
+
+*.log
+logs/
+tmp/
+temp/
+.cache/
+*.tmp
+*.bak
+*.old
+*.rej
+
+# Large binaries belong in a release, not in git history
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.dmg
+*.iso
+*.wasm
+
+# Demo recordings. Attach these to a release instead of committing them.
+*.mp4
+*.mov
+*.webm
+*.gif
+!docs/assets/*.gif
