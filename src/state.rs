@@ -41,12 +41,15 @@ pub type ReceiptId = String;
 
 /// A counterparty's profile.
 ///
-/// Minimal for now: the score fields defined in SPEC §4 land with the score
-/// mapping and the Reppo worker, not with the state layer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `score` is `None` until a Reppo evaluation settles (UNRATED). The
+/// effective score is recomputed from `settled_at` at read time, so it
+/// ages and expires honestly (see `score::effective_score`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     pub counterparty_name: String,
     pub target_url: String,
+    #[serde(default)]
+    pub score: Option<crate::score::SettledScore>,
 }
 
 /// A decision receipt.

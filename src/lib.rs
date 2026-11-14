@@ -3,6 +3,7 @@
 //! The product specification is `docs/SPEC.md`; the work plan is
 //! `docs/PLAN.md`; build order and PR rules are `docs/WORKFLOW.md`.
 
+pub mod score;
 pub mod state;
 
 use std::sync::Arc;
@@ -173,6 +174,7 @@ mod tests {
             state::Profile {
                 counterparty_name: "DataFeed Pro".to_string(),
                 target_url: "https://api.example.com/v1/feed".to_string(),
+                score: None,
             },
         );
         state.store().upsert_profile(
@@ -180,6 +182,7 @@ mod tests {
             state::Profile {
                 counterparty_name: "Translate Bot".to_string(),
                 target_url: "https://translate.example.com".to_string(),
+                score: None,
             },
         );
 
