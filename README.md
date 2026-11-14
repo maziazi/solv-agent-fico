@@ -308,5 +308,22 @@ project rather than a submission to it.
 
 ## License
 
-No license has been chosen yet. Until a `LICENSE` file is added, default
-copyright applies and no permissions are granted.
+Copyright (c) 2026 Muhamad Azis (maziazi). All rights reserved.
+
+This repository is **source-available, not open source**. See
+[`LICENSE`](LICENSE) for the full terms. In short:
+
+- You may **read** this repository and **fork it on GitHub** — a right GitHub's
+  Terms of Service grant to every user of any public repository, and one this
+  license acknowledges rather than pretends to revoke.
+- You may **not** use, run, deploy, modify, redistribute, or incorporate the
+  Work into anything else without prior written permission. Nor may you use it
+  as training or evaluation data for a machine learning model.
+- No patent rights and no trademark rights are granted.
+
+Stated plainly, in keeping with the rest of this repository: a license protects
+the **expression** here — this code, these documents — not the ideas behind
+them. Anyone may read the specification and build their own system from the same
+concepts. That is how copyright works, and no license changes it.
+
+Licensing enquiries: open an issue titled "Licensing enquiry".

@@ -1,0 +1,134 @@
+Solv — Proprietary Source-Available License
+Copyright (c) 2026 Muhamad Azis (maziazi). All rights reserved.
+
+This is NOT an open source license. It is not approved by the Open Source
+Initiative and it does not grant the freedoms an open source license grants.
+SPDX-License-Identifier: LicenseRef-Solv-Proprietary-1.0
+
+
+1. RESERVATION OF RIGHTS
+
+All rights in the contents of this repository — including the source code,
+documentation, specifications, designs, and all other files (together, "the
+Work") — are reserved by Muhamad Azis (maziazi) ("the Author").
+
+No right, permission, or license is granted except as expressly stated in
+Section 2.
+
+
+2. WHAT PUBLIC VISIBILITY DOES AND DOES NOT GRANT
+
+This repository is hosted publicly on GitHub. The Author acknowledges that, as
+a consequence of GitHub's Terms of Service, every GitHub user already holds a
+limited right to view the Work and to create a fork of it within GitHub.
+
+That right is acknowledged here because it cannot be revoked while the
+repository remains public. It is the ONLY permission anyone other than the
+Author holds, and it extends no further than viewing and forking within
+GitHub's own service.
+
+Specifically, that right does NOT permit any of the activities listed in
+Section 3.
+
+
+3. PROHIBITED WITHOUT PRIOR WRITTEN PERMISSION
+
+Without prior written permission from the Author, no person or organisation may:
+
+  (a) use the Work, in whole or in part, for any purpose — personal,
+      educational, internal, research, or commercial;
+
+  (b) run, host, deploy, or operate the Work or any part of it, whether or not
+      a fee is charged;
+
+  (c) copy, reproduce, or store the Work outside of a GitHub fork as described
+      in Section 2;
+
+  (d) modify, adapt, translate, or create derivative works from the Work;
+
+  (e) distribute, publish, sublicense, sell, rent, or otherwise transfer the
+      Work or any derivative of it;
+
+  (f) incorporate the Work or any part of it into another product, service,
+      repository, or codebase;
+
+  (g) remove, obscure, or alter any copyright notice, attribution, or license
+      text contained in the Work;
+
+  (h) use the Work, in whole or in part, as training data, fine-tuning data, or
+      evaluation data for any machine learning model, or to generate derivative
+      outputs by such a model.
+
+To request permission, see Section 9.
+
+
+4. NO PATENT AND NO TRADEMARK LICENSE
+
+No patent rights are granted by this license, whether expressly, by
+implication, or by estoppel.
+
+No trademark rights are granted. The name "Solv", the repository name
+"solv-agent-fico", and any associated logos or wordmarks may not be used to
+identify, endorse, or promote any product or service without prior written
+permission from the Author.
+
+
+5. CONTRIBUTIONS
+
+The Author does not solicit contributions.
+
+If you nonetheless submit a contribution — including by pull request, patch,
+issue comment, or any other means — you represent that you have the right to
+do so, and you grant the Author a perpetual, worldwide, irrevocable,
+royalty-free, non-exclusive license to use, reproduce, modify, distribute, and
+relicense that contribution as part of the Work, without obligation or
+attribution to you.
+
+Submitting a contribution grants you no rights in the Work.
+
+
+6. NO WARRANTY
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE WORK OR ITS USE.
+
+The Work describes a system that makes decisions about financial transactions.
+Nothing in this repository constitutes financial, legal, or security advice.
+
+
+7. TERMINATION
+
+Any permission described or granted in this license terminates automatically,
+without notice, upon any breach of Section 3.
+
+Upon termination you must cease all use of the Work and destroy all copies in
+your possession or control, including forks.
+
+
+8. SEVERABILITY AND GOVERNING LAW
+
+If any provision of this license is held unenforceable, the remaining
+provisions remain in full force.
+
+This license is governed by the laws of the Republic of Indonesia, without
+regard to its conflict-of-laws rules.
+
+
+9. LICENSING ENQUIRIES
+
+Permission beyond the scope of this license may be available. Open an issue at
+https://github.com/maziazi/solv-agent-fico/issues titled "Licensing enquiry",
+or contact the Author through the profile at https://github.com/maziazi.
+
+
+10. FUTURE RELICENSING
+
+The Author reserves the right to release any version of the Work under
+different terms, including an open source license, at any time. Such a release
+applies only to the versions explicitly designated by the Author and does not
+retroactively alter the terms applying to any other version.
