@@ -2,15 +2,20 @@
 //! `axum::serve`, HTTP over TCP — rather than the in-process router alone
 //! (which `src/lib.rs` unit tests already cover).
 
-use solv::build_router;
+use solv::state::Store;
+use solv::{AppState, build_router};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn healthz_answers_200_over_real_tcp() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("state.json")).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, build_router()).await.unwrap();
+        axum::serve(listener, build_router(AppState::new(store)))
+            .await
+            .unwrap();
     });
 
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();

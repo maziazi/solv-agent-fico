@@ -1,4 +1,5 @@
-use solv::{build_router, resolve_port};
+use solv::state::Store;
+use solv::{AppState, build_router, resolve_port, resolve_state_file};
 
 #[tokio::main]
 async fn main() {
@@ -10,6 +11,17 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let state_file = resolve_state_file(std::env::var("STATE_FILE").ok().as_deref());
+    let store = Store::open(&state_file).unwrap_or_else(|error| {
+        eprintln!(
+            "solv: failed to load state from {}: {error}",
+            state_file.display()
+        );
+        std::process::exit(1);
+    });
+    store.spawn_snapshot_worker().await;
+    let state = AppState::new(store);
+
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
         .unwrap_or_else(|e| panic!("failed to bind 0.0.0.0:{port}: {e}"));
@@ -20,7 +32,7 @@ async fn main() {
         .local_addr()
         .expect("bound listener has an address");
     println!("solv listening on {addr}");
-    axum::serve(listener, build_router())
+    axum::serve(listener, build_router(state))
         .await
         .expect("server error");
 }

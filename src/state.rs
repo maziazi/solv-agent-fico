@@ -1,0 +1,344 @@
+//! In-memory state with an atomic JSON snapshot (docs/SPEC.md §5.6).
+//!
+//! Three collections live in memory — counterparty profiles, receipts, and
+//! learned rules — and are persisted to `STATE_FILE` (default
+//! `solv_state.json`) by a background worker: write to a `.tmp` sibling,
+//! `fsync`, then `rename`, so an interrupted write can never leave a corrupt
+//! file behind. The snapshot is triggered asynchronously after the response
+//! ships, with a 2-second debounce, and never touches the hot path.
+//!
+//! The snapshot file contains untrusted counterparty text and is never
+//! committed (AGENTS.md hard prohibitions).
+
+use std::collections::HashMap;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex, mpsc};
+
+/// Debounce window for asynchronous snapshots (SPEC §5.6).
+pub const DEFAULT_SNAPSHOT_DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// Bumped when the on-disk snapshot layout changes in a way older code
+/// cannot read; a snapshot with any other version is rejected on load.
+const SCHEMA_VERSION: u32 = 1;
+
+pub type CounterpartyId = String;
+pub type ReceiptId = String;
+
+/// A counterparty's profile.
+///
+/// Minimal for now: the score fields defined in SPEC §4 land with the score
+/// mapping and the Reppo worker, not with the state layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Profile {
+    pub counterparty_name: String,
+    pub target_url: String,
+}
+
+/// A decision receipt.
+///
+/// Minimal for now: the full receipt schema of SPEC §7.1 lands with the
+/// receipt store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Receipt {
+    pub decision: String,
+    pub amount_usd: f64,
+    pub created_at_unix: u64,
+}
+
+/// A learned guardrail rule (SPEC §5.5). Full shape lands with rule
+/// compilation; what the state layer needs to persist is identity and status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LearnedRule {
+    pub rule_id: String,
+    pub status: RuleStatus,
+}
+
+/// A rule is born `Shadow` and reaches `Active` only through operator
+/// approval (SPEC §5.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleStatus {
+    Shadow,
+    Active,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("io error on the state file: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("state file is corrupt: {0}")]
+    Corrupt(String),
+}
+
+/// Everything a snapshot contains on disk.
+/// The three collections default to empty so a snapshot from a different
+/// schema version parses far enough for the version check to reject it with
+/// a precise message; `schema_version` itself stays mandatory.
+#[derive(Serialize, Deserialize)]
+struct StateData {
+    schema_version: u32,
+    #[serde(default)]
+    counterparties: HashMap<CounterpartyId, Profile>,
+    #[serde(default)]
+    receipts: HashMap<ReceiptId, Receipt>,
+    #[serde(default)]
+    learned_rules: Vec<LearnedRule>,
+}
+
+impl Default for StateData {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            counterparties: HashMap::new(),
+            receipts: HashMap::new(),
+            learned_rules: Vec::new(),
+        }
+    }
+}
+
+/// The in-memory store behind the whole service.
+pub struct Store {
+    counterparties: DashMap<CounterpartyId, Profile>,
+    receipts: DashMap<ReceiptId, Receipt>,
+    learned_rules: std::sync::RwLock<Vec<LearnedRule>>,
+    path: PathBuf,
+    debounce: Duration,
+    snapshot_tx: mpsc::Sender<()>,
+    snapshot_rx: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl Store {
+    /// Opens the store, reloading state from `path` when a snapshot exists.
+    ///
+    /// A missing file is a fresh start; a corrupt or future-version file is
+    /// an error — silently starting empty would lose profiles a payments
+    /// product depends on.
+    pub fn open(path: impl Into<PathBuf>) -> Result<Arc<Self>, StoreError> {
+        Self::open_with_debounce(path, DEFAULT_SNAPSHOT_DEBOUNCE)
+    }
+
+    /// [`Store::open`] with a custom debounce window, for tests.
+    pub fn open_with_debounce(
+        path: impl Into<PathBuf>,
+        debounce: Duration,
+    ) -> Result<Arc<Self>, StoreError> {
+        let path = path.into();
+        let data = Self::load(&path)?;
+        let (snapshot_tx, snapshot_rx) = mpsc::channel(1);
+        Ok(Arc::new(Self {
+            counterparties: data.counterparties.into_iter().collect(),
+            receipts: data.receipts.into_iter().collect(),
+            learned_rules: std::sync::RwLock::new(data.learned_rules),
+            path,
+            debounce,
+            snapshot_tx,
+            snapshot_rx: Mutex::new(Some(snapshot_rx)),
+        }))
+    }
+
+    fn load(path: &Path) -> Result<StateData, StoreError> {
+        match fs::read(path) {
+            Ok(bytes) => {
+                let data: StateData = serde_json::from_slice(&bytes)
+                    .map_err(|error| StoreError::Corrupt(error.to_string()))?;
+                if data.schema_version != SCHEMA_VERSION {
+                    return Err(StoreError::Corrupt(format!(
+                        "unsupported schema_version {} (expected {SCHEMA_VERSION})",
+                        data.schema_version
+                    )));
+                }
+                Ok(data)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StateData::default()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Inserts or replaces a counterparty profile.
+    pub fn upsert_profile(&self, id: CounterpartyId, profile: Profile) {
+        self.counterparties.insert(id, profile);
+    }
+
+    pub fn profile(&self, id: &str) -> Option<Profile> {
+        self.counterparties
+            .get(id)
+            .map(|entry| entry.value().clone())
+    }
+
+    /// All profiles, sorted by id so the directory output is deterministic.
+    pub fn list_profiles(&self) -> Vec<(CounterpartyId, Profile)> {
+        let mut entries: Vec<_> = self
+            .counterparties
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries
+    }
+
+    /// Inserts a receipt. Receipts are never mutated after creation
+    /// (SPEC §3.3 G4); inserting the same id twice is a caller bug.
+    pub fn insert_receipt(&self, id: ReceiptId, receipt: Receipt) {
+        self.receipts.insert(id, receipt);
+    }
+
+    pub fn receipt(&self, id: &str) -> Option<Receipt> {
+        self.receipts.get(id).map(|entry| entry.value().clone())
+    }
+
+    pub fn learned_rules(&self) -> Vec<LearnedRule> {
+        self.learned_rules
+            .read()
+            .expect("learned_rules lock")
+            .clone()
+    }
+
+    pub fn set_learned_rules(&self, rules: Vec<LearnedRule>) {
+        *self.learned_rules.write().expect("learned_rules lock") = rules;
+    }
+
+    /// Asks the snapshot worker to persist state after the debounce window.
+    ///
+    /// Never blocks and never allocates: the channel has capacity one, so a
+    /// request while one is pending coalesces into it.
+    pub fn request_snapshot(&self) {
+        let _ = self.snapshot_tx.try_send(());
+    }
+
+    /// Serialises state and writes it atomically, now.
+    ///
+    /// Used by the background worker and by tests; the hot path uses
+    /// [`Store::request_snapshot`] instead.
+    pub fn write_snapshot_now(&self) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(&self.snapshot_data())
+            .map_err(|error| StoreError::Corrupt(error.to_string()))?;
+        atomic_write(&self.path, &bytes)?;
+        Ok(())
+    }
+
+    fn snapshot_data(&self) -> StateData {
+        StateData {
+            schema_version: SCHEMA_VERSION,
+            counterparties: self.list_profiles().into_iter().collect(),
+            receipts: self
+                .receipts
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect(),
+            learned_rules: self.learned_rules(),
+        }
+    }
+
+    /// Spawns the background snapshot worker: wait for a request, let the
+    /// debounce window absorb further mutations, then persist off the async
+    /// runtime's threads. Panics if called twice on one store.
+    pub async fn spawn_snapshot_worker(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let store = Arc::clone(self);
+        let mut receiver = store
+            .snapshot_rx
+            .lock()
+            .await
+            .take()
+            .expect("snapshot worker already spawned");
+        tokio::spawn(async move {
+            loop {
+                if receiver.recv().await.is_none() {
+                    break; // store dropped; nothing left to persist
+                }
+                tokio::time::sleep(store.debounce).await;
+                while receiver.try_recv().is_ok() {
+                    // Coalesce requests that arrived during the window.
+                }
+                let writer = Arc::clone(&store);
+                let result = tokio::task::spawn_blocking(move || writer.write_snapshot_now()).await;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => eprintln!("solv: snapshot write failed: {error}"),
+                    Err(join_error) => {
+                        eprintln!("solv: snapshot writer panicked: {join_error}")
+                    }
+                }
+            }
+        })
+    }
+}
+
+/// Writes `bytes` to `path` atomically: create the `.tmp` sibling, write,
+/// `fsync`, `rename` over the destination, then best-effort fsync of the
+/// parent directory so the rename itself survives a power loss.
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = tmp_path(path);
+    {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    fs::rename(&tmp, path)?;
+    sync_parent_dir(path);
+    Ok(())
+}
+
+/// `solv_state.json` -> `solv_state.json.tmp` (the name `.gitignore` knows).
+fn tmp_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".tmp");
+    PathBuf::from(name)
+}
+
+fn sync_parent_dir(path: &Path) {
+    #[cfg(unix)]
+    {
+        if let Some(dir) = path.parent() {
+            if let Ok(dir_file) = File::open(dir) {
+                let _ = dir_file.sync_all();
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tmp_path_appends_the_tmp_suffix() {
+        assert_eq!(
+            tmp_path(Path::new("solv_state.json")),
+            PathBuf::from("solv_state.json.tmp")
+        );
+    }
+
+    #[test]
+    fn default_state_data_carries_the_schema_version() {
+        let data = StateData::default();
+        assert_eq!(data.schema_version, SCHEMA_VERSION);
+        let bytes = serde_json::to_vec(&data).unwrap();
+        assert!(
+            std::str::from_utf8(&bytes)
+                .unwrap()
+                .contains("\"schema_version\":1")
+        );
+    }
+
+    #[test]
+    fn atomic_write_replaces_content_and_leaves_no_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        atomic_write(&path, b"first").unwrap();
+        atomic_write(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert!(!dir.path().join("state.json.tmp").exists());
+    }
+}
