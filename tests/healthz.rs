@@ -1,23 +1,30 @@
-//! Boot-level smoke coverage beyond the in-process router tests: the router
-//! the binary serves is the same one `solv::build_router` exposes.
+//! Boot-level integration test: drives the real serving path — bind,
+//! `axum::serve`, HTTP over TCP — rather than the in-process router alone
+//! (which `src/lib.rs` unit tests already cover).
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
-use tower::ServiceExt;
+use solv::build_router;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
-async fn healthz_is_reachable_through_the_served_router() {
-    let response = solv::build_router()
-        .oneshot(
-            Request::builder()
-                .uri("/healthz")
-                .body(Body::empty())
-                .unwrap(),
-        )
+async fn healthz_answers_200_over_real_tcp() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, build_router()).await.unwrap();
+    });
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(&body[..], b"ok");
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    let response = String::from_utf8_lossy(&response);
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "unexpected status line in: {response}"
+    );
+    assert!(response.ends_with("ok"), "unexpected body in: {response}");
 }

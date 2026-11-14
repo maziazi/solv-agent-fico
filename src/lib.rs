@@ -18,6 +18,23 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
+/// Listen port used when `PORT` is unset or empty (README "Development").
+pub const DEFAULT_PORT: u16 = 8080;
+
+/// Resolves the listen port from the `PORT` environment variable.
+///
+/// Unset or empty falls back to [`DEFAULT_PORT`]. A set-but-invalid value is
+/// an operator error and returns `Err` so the process can fail loudly instead
+/// of silently binding the default port.
+pub fn resolve_port(var: Option<&str>) -> Result<u16, String> {
+    match var {
+        None | Some("") => Ok(DEFAULT_PORT),
+        Some(raw) => raw
+            .parse::<u16>()
+            .map_err(|_| format!("invalid PORT value: {raw:?}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +71,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn resolve_port_defaults_when_unset_or_empty() {
+        assert_eq!(resolve_port(None).unwrap(), DEFAULT_PORT);
+        assert_eq!(resolve_port(Some("")).unwrap(), DEFAULT_PORT);
+    }
+
+    #[test]
+    fn resolve_port_parses_a_valid_value() {
+        assert_eq!(resolve_port(Some("9000")).unwrap(), 9000);
+    }
+
+    #[test]
+    fn resolve_port_rejects_invalid_values() {
+        assert!(resolve_port(Some("abc")).is_err());
+        assert!(resolve_port(Some("99999")).is_err());
+        assert!(resolve_port(Some("0x10")).is_err());
     }
 }
