@@ -1,0 +1,16 @@
+[package]
+name = "solv"
+version = "0.1.0"
+edition = "2024"
+description = "A pre-spend gate and credit bureau for AI agents"
+license-file = "LICENSE"
+publish = false
+
+[dependencies]
+axum = "0.8"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
