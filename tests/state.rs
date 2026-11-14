@@ -21,14 +21,14 @@ fn snapshot_roundtrip_survives_restart() {
     let store = Store::open(&path).unwrap();
     store.upsert_profile("cp-1".to_string(), sample_profile("DataFeed Pro"));
     store.upsert_profile("cp-2".to_string(), sample_profile("Translate Bot"));
-    store.insert_receipt(
+    assert!(store.insert_receipt(
         "slv_001".to_string(),
         Receipt {
             decision: "BLOCK".to_string(),
             amount_usd: 50.0,
             created_at_unix: 1_762_700_000,
         },
-    );
+    ));
     store.set_learned_rules(vec![LearnedRule {
         rule_id: "SOLV-RULE-001".to_string(),
         status: RuleStatus::Shadow,
@@ -243,4 +243,67 @@ async fn server_flushes_final_snapshot_on_graceful_shutdown() {
         reopened.profile("cp-1"),
         Some(sample_profile("DataFeed Pro"))
     );
+}
+
+#[test]
+fn concurrent_snapshot_writers_never_corrupt_the_destination() {
+    // Regression test for the worker-vs-shutdown-flush race: both writers
+    // share one `.tmp` path, so unserialised writes mix payloads of
+    // different lengths into the destination. The write mutex must make
+    // every intermediate and final state parseable.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    let store = Store::open(&path).unwrap();
+
+    let short = "x".repeat(10);
+    let long = "y".repeat(200);
+    store.upsert_profile("cp-1".to_string(), sample_profile(&short));
+    store.write_snapshot_now().unwrap();
+
+    let mut writers = Vec::new();
+    for _ in 0..4 {
+        let store = std::sync::Arc::clone(&store);
+        writers.push(std::thread::spawn(move || {
+            for _ in 0..50 {
+                store.write_snapshot_now().unwrap();
+            }
+        }));
+    }
+    // Mutate payload length while writers run.
+    for round in 0..40 {
+        let name = if round % 2 == 0 { &long } else { &short };
+        store.upsert_profile("cp-1".to_string(), sample_profile(name));
+    }
+    for writer in writers {
+        writer.join().unwrap();
+    }
+
+    // Every write must have left a parseable file; the final one must load.
+    Store::open(&path)
+        .unwrap_or_else(|error| panic!("destination corrupted: {error}"))
+        .profile("cp-1")
+        .expect("profile survived");
+}
+
+#[tokio::test]
+async fn worker_survives_a_failing_write_and_keeps_serving() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("state.json");
+    let store = Store::open_with_debounce(&blocked, Duration::from_millis(20)).unwrap();
+    let worker = store.spawn_snapshot_worker().await;
+    // Destination becomes a directory: every worker write fails with Io.
+    std::fs::create_dir(&blocked).unwrap();
+
+    store.upsert_profile("cp-1".to_string(), sample_profile("DataFeed Pro"));
+    store.request_snapshot();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // The worker logged the failure and kept looping.
+    assert!(
+        !worker.is_finished(),
+        "the worker loop must survive a failing write"
+    );
+    assert_eq!(store.profile("cp-1"), Some(sample_profile("DataFeed Pro")));
+    store.upsert_profile("cp-2".to_string(), sample_profile("Translate Bot"));
+    assert_eq!(store.profile("cp-2"), Some(sample_profile("Translate Bot")));
 }

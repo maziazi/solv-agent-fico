@@ -17,7 +17,7 @@
 //! The snapshot file contains untrusted counterparty text and is never
 //! committed (AGENTS.md hard prohibitions).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -88,14 +88,16 @@ pub enum StoreError {
 /// Everything a snapshot contains on disk.
 /// The three collections default to empty so a snapshot from a different
 /// schema version parses far enough for the version check to reject it with
-/// a precise message; `schema_version` itself stays mandatory.
+/// a precise message; `schema_version` itself stays mandatory. `BTreeMap`
+/// makes the serialised key order deterministic, so identical state
+/// produces byte-identical snapshots.
 #[derive(Serialize, Deserialize)]
 struct StateData {
     schema_version: u32,
     #[serde(default)]
-    counterparties: HashMap<CounterpartyId, Profile>,
+    counterparties: BTreeMap<CounterpartyId, Profile>,
     #[serde(default)]
-    receipts: HashMap<ReceiptId, Receipt>,
+    receipts: BTreeMap<ReceiptId, Receipt>,
     #[serde(default)]
     learned_rules: Vec<LearnedRule>,
 }
@@ -104,8 +106,8 @@ impl Default for StateData {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
-            counterparties: HashMap::new(),
-            receipts: HashMap::new(),
+            counterparties: BTreeMap::new(),
+            receipts: BTreeMap::new(),
             learned_rules: Vec::new(),
         }
     }
@@ -120,6 +122,11 @@ pub struct Store {
     debounce: Duration,
     snapshot_tx: mpsc::Sender<()>,
     snapshot_rx: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Serialises every snapshot write. The debounce worker and the
+    /// shutdown flush are two independent callers; without this lock their
+    /// writes interleave into the shared `.tmp` sibling and a mixed file
+    /// gets renamed into place.
+    write_mutex: std::sync::Mutex<()>,
 }
 
 impl Store {
@@ -148,6 +155,7 @@ impl Store {
             debounce,
             snapshot_tx,
             snapshot_rx: Mutex::new(Some(snapshot_rx)),
+            write_mutex: std::sync::Mutex::new(()),
         }))
     }
 
@@ -194,6 +202,10 @@ impl Store {
     /// Inserts a receipt, refusing to overwrite an existing id: receipts
     /// are never mutated after creation (SPEC §3.3 G4). Returns `false`
     /// and leaves the stored receipt untouched when `id` already exists.
+    ///
+    /// The result is `#[must_use]`: an ignored `false` would silently
+    /// reintroduce the mutation this guard exists to prevent.
+    #[must_use = "a false return means the receipt id already exists; the caller must handle it"]
     pub fn insert_receipt(&self, id: ReceiptId, receipt: Receipt) -> bool {
         use dashmap::mapref::entry::Entry;
         match self.receipts.entry(id) {
@@ -236,6 +248,11 @@ impl Store {
     /// Used by the background worker and by tests; the hot path uses
     /// [`Store::request_snapshot`] instead.
     pub fn write_snapshot_now(&self) -> Result<(), StoreError> {
+        // Serialised across callers (see `write_mutex`): two concurrent
+        // writers would interleave into the shared `.tmp` sibling and rename
+        // a mixed file into place. Off the hot path, so holding this across
+        // fsync is fine.
+        let _guard = self.write_mutex.lock().expect("write_mutex lock");
         // Serialising these plain types cannot fail; a panic here (caught by
         // the worker's spawn_blocking) is more honest than a "corrupt file"
         // error that would send an operator digging through a healthy file.
@@ -246,16 +263,14 @@ impl Store {
     }
 
     fn snapshot_data(&self) -> StateData {
-        let mut receipts: Vec<_> = self
-            .receipts
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
-        receipts.sort_by(|a, b| a.0.cmp(&b.0));
         StateData {
             schema_version: SCHEMA_VERSION,
             counterparties: self.list_profiles().into_iter().collect(),
-            receipts: receipts.into_iter().collect(),
+            receipts: self
+                .receipts
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect(),
             learned_rules: self.learned_rules(),
         }
     }
