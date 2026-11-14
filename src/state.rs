@@ -7,6 +7,13 @@
 //! file behind. The snapshot is triggered asynchronously after the response
 //! ships, with a 2-second debounce, and never touches the hot path.
 //!
+//! Accepted limit (deliberate, revisit with PR-08): the three collections
+//! are serialised without a cross-collection transaction, so a snapshot can
+//! pair a fresh receipt with a not-yet-updated profile if a decision lands
+//! mid-serialisation. It self-heals on the next mutation's snapshot. Once
+//! PR-08 introduces multi-collection decision writes, they and the snapshot
+//! will share a transaction boundary.
+//!
 //! The snapshot file contains untrusted counterparty text and is never
 //! committed (AGENTS.md hard prohibitions).
 
@@ -184,16 +191,27 @@ impl Store {
         entries
     }
 
-    /// Inserts a receipt. Receipts are never mutated after creation
-    /// (SPEC §3.3 G4); inserting the same id twice is a caller bug.
-    pub fn insert_receipt(&self, id: ReceiptId, receipt: Receipt) {
-        self.receipts.insert(id, receipt);
+    /// Inserts a receipt, refusing to overwrite an existing id: receipts
+    /// are never mutated after creation (SPEC §3.3 G4). Returns `false`
+    /// and leaves the stored receipt untouched when `id` already exists.
+    pub fn insert_receipt(&self, id: ReceiptId, receipt: Receipt) -> bool {
+        use dashmap::mapref::entry::Entry;
+        match self.receipts.entry(id) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(vacant) => {
+                vacant.insert(receipt);
+                true
+            }
+        }
     }
 
     pub fn receipt(&self, id: &str) -> Option<Receipt> {
         self.receipts.get(id).map(|entry| entry.value().clone())
     }
 
+    // Lock poisoning is treated as unrecoverable: the critical sections are
+    // trivial clones and assignments that cannot panic, so a poisoned lock
+    // means memory corruption, not a recoverable state.
     pub fn learned_rules(&self) -> Vec<LearnedRule> {
         self.learned_rules
             .read()
@@ -218,31 +236,39 @@ impl Store {
     /// Used by the background worker and by tests; the hot path uses
     /// [`Store::request_snapshot`] instead.
     pub fn write_snapshot_now(&self) -> Result<(), StoreError> {
-        let bytes = serde_json::to_vec(&self.snapshot_data())
-            .map_err(|error| StoreError::Corrupt(error.to_string()))?;
+        // Serialising these plain types cannot fail; a panic here (caught by
+        // the worker's spawn_blocking) is more honest than a "corrupt file"
+        // error that would send an operator digging through a healthy file.
+        let bytes =
+            serde_json::to_vec(&self.snapshot_data()).expect("state serialisation cannot fail");
         atomic_write(&self.path, &bytes)?;
         Ok(())
     }
 
     fn snapshot_data(&self) -> StateData {
+        let mut receipts: Vec<_> = self
+            .receipts
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        receipts.sort_by(|a, b| a.0.cmp(&b.0));
         StateData {
             schema_version: SCHEMA_VERSION,
             counterparties: self.list_profiles().into_iter().collect(),
-            receipts: self
-                .receipts
-                .iter()
-                .map(|entry| (entry.key().clone(), entry.value().clone()))
-                .collect(),
+            receipts: receipts.into_iter().collect(),
             learned_rules: self.learned_rules(),
         }
     }
 
     /// Spawns the background snapshot worker: wait for a request, let the
     /// debounce window absorb further mutations, then persist off the async
-    /// runtime's threads. Panics if called twice on one store.
+    /// runtime's threads. The worker holds the store weakly, so it exits
+    /// once every strong reference is gone. Panics if called twice on one
+    /// store.
     pub async fn spawn_snapshot_worker(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
-        let store = Arc::clone(self);
-        let mut receiver = store
+        let weak = Arc::downgrade(self);
+        let debounce = self.debounce;
+        let mut receiver = self
             .snapshot_rx
             .lock()
             .await
@@ -251,14 +277,16 @@ impl Store {
         tokio::spawn(async move {
             loop {
                 if receiver.recv().await.is_none() {
-                    break; // store dropped; nothing left to persist
+                    break; // sender dropped with the store; nothing to persist
                 }
-                tokio::time::sleep(store.debounce).await;
+                tokio::time::sleep(debounce).await;
                 while receiver.try_recv().is_ok() {
                     // Coalesce requests that arrived during the window.
                 }
-                let writer = Arc::clone(&store);
-                let result = tokio::task::spawn_blocking(move || writer.write_snapshot_now()).await;
+                let Some(store) = weak.upgrade() else {
+                    break; // store dropped while we slept
+                };
+                let result = tokio::task::spawn_blocking(move || store.write_snapshot_now()).await;
                 match result {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => eprintln!("solv: snapshot write failed: {error}"),

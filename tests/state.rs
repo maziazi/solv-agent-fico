@@ -151,3 +151,96 @@ async fn debounce_worker_persists_after_quiescence() {
         Some(sample_profile("Translate Bot"))
     );
 }
+
+#[test]
+fn duplicate_receipt_id_is_refused_and_original_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("state.json")).unwrap();
+    let original = Receipt {
+        decision: "BLOCK".to_string(),
+        amount_usd: 50.0,
+        created_at_unix: 1_762_700_000,
+    };
+    assert!(store.insert_receipt("slv_001".to_string(), original.clone()));
+    assert!(!store.insert_receipt(
+        "slv_001".to_string(),
+        Receipt {
+            decision: "APPROVE".to_string(),
+            amount_usd: 1.0,
+            created_at_unix: 2_762_700_000,
+        }
+    ));
+    assert_eq!(store.receipt("slv_001"), Some(original));
+}
+
+#[test]
+fn unwritable_target_reports_io_error_and_store_keeps_serving() {
+    let dir = tempfile::tempdir().unwrap();
+    // The destination is a directory: the .tmp sibling can be written, but
+    // the rename onto a directory fails — the closest offline stand-in for
+    // a disk-level write failure.
+    let blocked = dir.path().join("state.json");
+    let store = Store::open(&blocked).unwrap();
+    std::fs::create_dir(&blocked).unwrap();
+
+    assert!(matches!(store.write_snapshot_now(), Err(StoreError::Io(_))));
+    store.upsert_profile("cp-1".to_string(), sample_profile("DataFeed Pro"));
+    assert_eq!(store.profile("cp-1"), Some(sample_profile("DataFeed Pro")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_mutations_leave_parseable_snapshots() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    let store = Store::open_with_debounce(&path, Duration::from_millis(20)).unwrap();
+    store.spawn_snapshot_worker().await;
+
+    let mut tasks = Vec::new();
+    for task_index in 0..8 {
+        let store = std::sync::Arc::clone(&store);
+        tasks.push(tokio::spawn(async move {
+            for i in 0..25 {
+                store.upsert_profile(
+                    format!("cp-{task_index}-{i}"),
+                    sample_profile("DataFeed Pro"),
+                );
+                store.request_snapshot();
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    store.write_snapshot_now().unwrap();
+
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(reopened.list_profiles().len(), 8 * 25);
+}
+
+#[tokio::test]
+async fn server_flushes_final_snapshot_on_graceful_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    let store = Store::open(&path).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(solv::run_server(
+        listener,
+        solv::AppState::new(std::sync::Arc::clone(&store)),
+        async move {
+            let _ = shutdown_rx.await;
+        },
+    ));
+
+    store.upsert_profile("cp-1".to_string(), sample_profile("DataFeed Pro"));
+    shutdown_tx.send(()).unwrap();
+    server.await.unwrap().unwrap();
+
+    assert!(path.exists(), "graceful shutdown must flush the snapshot");
+    let reopened = Store::open(&path).unwrap();
+    assert_eq!(
+        reopened.profile("cp-1"),
+        Some(sample_profile("DataFeed Pro"))
+    );
+}

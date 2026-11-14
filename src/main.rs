@@ -1,5 +1,29 @@
 use solv::state::Store;
-use solv::{AppState, build_router, resolve_port, resolve_state_file};
+use solv::{AppState, resolve_port, resolve_state_file, run_server};
+
+/// Resolves on Ctrl-C (any platform) or SIGTERM (Unix), whichever first.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("ctrl_c handler installed");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        signal(SignalKind::terminate())
+            .expect("SIGTERM handler installed")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -32,7 +56,7 @@ async fn main() {
         .local_addr()
         .expect("bound listener has an address");
     println!("solv listening on {addr}");
-    axum::serve(listener, build_router(state))
+    run_server(listener, state, shutdown_signal())
         .await
         .expect("server error");
 }

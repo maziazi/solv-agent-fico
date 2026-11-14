@@ -48,6 +48,26 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
+/// Serves the router until `shutdown` resolves, then flushes a final
+/// snapshot before returning.
+///
+/// The explicit flush closes the debounce window: without it a SIGTERM
+/// (every deploy) would drop up to 2 seconds of acknowledged state.
+pub async fn run_server(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    let store = Arc::clone(state.store());
+    axum::serve(listener, build_router(state))
+        .with_graceful_shutdown(shutdown)
+        .await?;
+    if let Err(error) = store.write_snapshot_now() {
+        eprintln!("solv: final snapshot write failed: {error}");
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct DirectoryEntry {
     counterparty_id: String,
