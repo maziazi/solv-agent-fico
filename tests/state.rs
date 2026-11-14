@@ -10,6 +10,7 @@ fn sample_profile(name: &str) -> Profile {
     Profile {
         counterparty_name: name.to_string(),
         target_url: format!("https://{name}.example.com"),
+        score: None,
     }
 }
 
