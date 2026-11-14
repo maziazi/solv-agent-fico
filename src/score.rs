@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// The four pillars sent to Reppo as criteria (SPEC §4.1), scored 0–10.
+///
+/// The 0–10 range is trusted input from Reppo here; the acceptance point
+/// that validates it is the Reppo worker that writes a `SettledScore`
+/// (PR-09), not this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pillars {
     pub reliability: u8,
@@ -49,8 +53,12 @@ pub struct EffectiveScore {
 /// ```
 ///
 /// Input is clamped to 0–100; rounding is half away from zero. Every row of
-/// the SPEC table is pinned by a test.
+/// the SPEC table is pinned by a test. A NaN input fails closed to 300: it
+/// must never surface as an out-of-range number on a receipt.
 pub fn fico_raw(reppo_score: f64) -> u16 {
+    if reppo_score.is_nan() {
+        return 300;
+    }
     let clamped = reppo_score.clamp(0.0, 100.0);
     (300.0 + (clamped * 5.5).round()) as u16
 }
@@ -80,6 +88,11 @@ pub fn fico_effective(fico_raw: u16, decay: u32) -> u16 {
 ///
 /// Returns `None` when the evidence is older than 90 days: the counterparty
 /// is `UNRATED`, never quietly assigned a lowered number.
+///
+/// Accepted limit: a `settled_at` in the future (clock skew, or a tampered
+/// snapshot — which SPEC §8.1 already declares untrusted for integrity)
+/// reads as age 0 and keeps the score fresh for its full lifetime; future
+/// timestamps are not treated as evidence of anything worse than skew.
 pub fn effective_score(score: &SettledScore, now_unix: u64) -> Option<EffectiveScore> {
     let age_seconds = now_unix.saturating_sub(score.settled_at_unix);
     let age_days = (age_seconds / SECONDS_PER_DAY) as u32;
@@ -172,5 +185,38 @@ mod tests {
         assert_eq!(fico_raw(50.0), 575);
         assert_eq!(fico_raw(78.0), 729);
         assert_eq!(fico_raw(100.0), 850);
+    }
+
+    #[test]
+    fn nan_fails_closed_to_the_floor() {
+        assert_eq!(fico_raw(f64::NAN), 300);
+    }
+
+    #[test]
+    fn rounding_is_half_away_from_zero() {
+        // 49 × 5.5 = 269.5 — the only class of input where the rounding
+        // convention is observable.
+        assert_eq!(fico_raw(49.0), 570);
+    }
+
+    #[test]
+    fn tier_wire_strings_are_pinned() {
+        assert_eq!(serde_json::to_string(&Tier::Prime).unwrap(), r#""PRIME""#);
+        assert_eq!(
+            serde_json::to_string(&Tier::Standard).unwrap(),
+            r#""STANDARD""#
+        );
+        assert_eq!(
+            serde_json::to_string(&Tier::Subprime).unwrap(),
+            r#""SUBPRIME""#
+        );
+        assert_eq!(
+            serde_json::to_string(&Tier::HighRisk).unwrap(),
+            r#""HIGH_RISK""#
+        );
+        assert_eq!(
+            serde_json::to_string(&Tier::Unrated).unwrap(),
+            r#""UNRATED""#
+        );
     }
 }
