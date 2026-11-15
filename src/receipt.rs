@@ -27,9 +27,11 @@ use crate::api::iso8601_utc;
 use crate::policy::{Decision, PolicyConfig};
 use crate::score::{EffectiveScore, SettledScore};
 
-/// Version of the rule set a decision was made under. Bumped whenever the
-/// gate's rows or the default policy values change; learned rules
-/// (PR-10) will make it dynamic. It is part of the hashed evidence.
+/// Base version of the rule set a decision was made under. Bumped whenever
+/// the gate's rows or the default policy values change. A decision's
+/// `ruleset_version` is this plus the number of changes to the active
+/// learned-rule set (`Store::compiled_rules`), so it is `1` until an
+/// operator promotes a rule. It is part of the hashed evidence.
 pub const RULESET_VERSION: u32 = 1;
 
 /// Lowercase hex SHA-256.
@@ -196,7 +198,10 @@ pub struct EvidenceInput<'a> {
     pub effective: Option<EffectiveScore>,
     pub tier1: Tier1Evidence<'a>,
     pub tier2: Option<Tier2Evidence<'a>>,
+    /// Ids of the learned rules the Tier 1 response answered (SPEC §6.3).
     pub rules_applied: &'a [String],
+    /// `RULESET_VERSION` plus the number of changes to the active rule set.
+    pub ruleset_version: u32,
     pub config: &'a PolicyConfig,
     pub decision: &'a Decision,
 }
@@ -264,7 +269,7 @@ pub fn build_evidence(input: &EvidenceInput<'_>) -> Value {
         "tier1": tier1,
         "tier2": tier2,
         "rules_applied": input.rules_applied,
-        "ruleset_version": RULESET_VERSION,
+        "ruleset_version": input.ruleset_version,
         "policy_config": input.config,
         "decision": {
             "decision": input.decision.kind.as_str(),

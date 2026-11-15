@@ -9,6 +9,7 @@ pub mod policy;
 pub mod reason;
 pub mod receipt;
 pub mod reppo;
+pub mod rules;
 pub mod score;
 pub mod state;
 pub mod tier1;

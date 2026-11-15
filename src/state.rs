@@ -72,12 +72,44 @@ pub struct Receipt {
     pub response: serde_json::Value,
 }
 
-/// A learned guardrail rule (SPEC §5.5). Full shape lands with rule
-/// compilation; what the state layer needs to persist is identity and status.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A learned guardrail rule (SPEC §5.5).
+///
+/// Every field after `status` defaults, so a snapshot written before rule
+/// compilation (identity and status only) still loads. Such a rule has no
+/// `topic` and is never compiled into a question.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LearnedRule {
     pub rule_id: String,
     pub status: RuleStatus,
+    #[serde(default)]
+    pub topic: Option<crate::rules::RuleTopic>,
+    #[serde(default = "default_rule_effect")]
+    pub effect: crate::policy::RuleEffect,
+    #[serde(default = "default_rule_threshold")]
+    pub threshold: f64,
+    #[serde(default)]
+    pub created_from: Option<crate::rules::RuleSource>,
+}
+
+fn default_rule_effect() -> crate::policy::RuleEffect {
+    crate::policy::RuleEffect::ForcedHold
+}
+
+fn default_rule_threshold() -> f64 {
+    crate::rules::DEFAULT_THRESHOLD
+}
+
+impl Default for LearnedRule {
+    fn default() -> Self {
+        Self {
+            rule_id: String::new(),
+            status: RuleStatus::Shadow,
+            topic: None,
+            effect: default_rule_effect(),
+            threshold: default_rule_threshold(),
+            created_from: None,
+        }
+    }
 }
 
 /// A rule is born `Shadow` and reaches `Active` only through operator
@@ -112,6 +144,11 @@ struct StateData {
     receipts: BTreeMap<ReceiptId, Receipt>,
     #[serde(default)]
     learned_rules: Vec<LearnedRule>,
+    /// Counts changes to the set of active rules; `ruleset_version` on a
+    /// receipt is the base version plus this. A snapshot without it starts
+    /// at zero.
+    #[serde(default)]
+    rules_epoch: u32,
 }
 
 impl Default for StateData {
@@ -121,8 +158,16 @@ impl Default for StateData {
             counterparties: BTreeMap::new(),
             receipts: BTreeMap::new(),
             learned_rules: Vec::new(),
+            rules_epoch: 0,
         }
     }
+}
+
+/// The compiled active rules and the epoch they were compiled at. Rebuilt
+/// whenever rules change; the hot path only clones the `Arc`.
+struct CompiledState {
+    epoch: u32,
+    compiled: Arc<crate::rules::CompiledRules>,
 }
 
 /// The in-memory store behind the whole service.
@@ -130,6 +175,7 @@ pub struct Store {
     counterparties: DashMap<CounterpartyId, Profile>,
     receipts: DashMap<ReceiptId, Receipt>,
     learned_rules: std::sync::RwLock<Vec<LearnedRule>>,
+    compiled_rules: std::sync::RwLock<CompiledState>,
     path: PathBuf,
     debounce: Duration,
     snapshot_tx: mpsc::Sender<()>,
@@ -159,10 +205,15 @@ impl Store {
         let path = path.into();
         let data = Self::load(&path)?;
         let (snapshot_tx, snapshot_rx) = mpsc::channel(1);
+        let compiled = crate::rules::CompiledRules::compile(&data.learned_rules, data.rules_epoch);
         Ok(Arc::new(Self {
             counterparties: data.counterparties.into_iter().collect(),
             receipts: data.receipts.into_iter().collect(),
             learned_rules: std::sync::RwLock::new(data.learned_rules),
+            compiled_rules: std::sync::RwLock::new(CompiledState {
+                epoch: data.rules_epoch,
+                compiled,
+            }),
             path,
             debounce,
             snapshot_tx,
@@ -244,7 +295,76 @@ impl Store {
     }
 
     pub fn set_learned_rules(&self, rules: Vec<LearnedRule>) {
-        *self.learned_rules.write().expect("learned_rules lock") = rules;
+        let mut guard = self.learned_rules.write().expect("learned_rules lock");
+        *guard = rules;
+        self.recompile(&guard, false);
+    }
+
+    /// The active rules, compiled. The hot path calls this once per
+    /// request: a read lock and an `Arc` clone, no recompilation.
+    pub fn compiled_rules(&self) -> Arc<crate::rules::CompiledRules> {
+        let guard = self
+            .compiled_rules
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(&guard.compiled)
+    }
+
+    /// Stores a distilled rule as `shadow` under the next free id. A topic
+    /// that already has a rule (in any status) is a duplicate: one topic,
+    /// one rule, so a repeated critique cannot crowd the set.
+    pub fn add_learned_rule(&self, draft: crate::rules::RuleDraft) -> crate::rules::AddRule {
+        use crate::rules::{AddRule, MAX_STORED_RULES, next_rule_id};
+        let mut guard = self.learned_rules.write().expect("learned_rules lock");
+        if guard.iter().any(|rule| rule.topic == Some(draft.topic)) {
+            return AddRule::Duplicate;
+        }
+        if guard.len() >= MAX_STORED_RULES {
+            return AddRule::StoreFull;
+        }
+        let Some(rule_id) = next_rule_id(&guard) else {
+            return AddRule::StoreFull;
+        };
+        guard.push(LearnedRule {
+            rule_id: rule_id.clone(),
+            status: RuleStatus::Shadow,
+            topic: Some(draft.topic),
+            effect: default_rule_effect(),
+            threshold: default_rule_threshold(),
+            created_from: Some(draft.source),
+        });
+        // A shadow rule is not compiled: the active set did not change.
+        self.recompile(&guard, false);
+        AddRule::Added(rule_id)
+    }
+
+    /// Moves a rule between `shadow` and `active` — the operator's
+    /// promotion and demotion (SPEC §5.5). Returns `false` for an unknown
+    /// rule. A real change bumps the epoch, so `ruleset_version` moves with
+    /// the active set.
+    pub fn set_learned_rule_status(&self, rule_id: &str, status: RuleStatus) -> bool {
+        let mut guard = self.learned_rules.write().expect("learned_rules lock");
+        let Some(rule) = guard.iter_mut().find(|rule| rule.rule_id == rule_id) else {
+            return false;
+        };
+        let changed = rule.status != status;
+        rule.status = status;
+        self.recompile(&guard, changed);
+        true
+    }
+
+    /// Rebuilds the compiled set from `rules`. Callers hold the
+    /// `learned_rules` write lock, so rules, epoch and compiled set move
+    /// together and the lock order is always rules, then compiled.
+    fn recompile(&self, rules: &[LearnedRule], bump_epoch: bool) {
+        let mut state = self
+            .compiled_rules
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if bump_epoch {
+            state.epoch = state.epoch.saturating_add(1);
+        }
+        state.compiled = crate::rules::CompiledRules::compile(rules, state.epoch);
     }
 
     /// Asks the snapshot worker to persist state after the debounce window.
@@ -284,6 +404,11 @@ impl Store {
                 .map(|entry| (entry.key().clone(), entry.value().clone()))
                 .collect(),
             learned_rules: self.learned_rules(),
+            rules_epoch: self
+                .compiled_rules
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .epoch,
         }
     }
 

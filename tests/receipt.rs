@@ -282,6 +282,7 @@ fn evidence_carries_every_section_of_spec_6_3() {
             latency_ms: 612,
         }),
         rules_applied: &[],
+        ruleset_version: RULESET_VERSION,
         config: &config,
         decision: &decision,
     });
@@ -332,6 +333,7 @@ fn a_non_finite_float_never_reaches_a_sealed_receipt() {
         },
         tier2: None,
         rules_applied: &[],
+        ruleset_version: RULESET_VERSION,
         config: &config,
         decision: &decision,
     });
@@ -355,6 +357,7 @@ fn unrated_counterparty_and_skipped_tiers_are_null_not_empty_objects() {
         },
         tier2: None,
         rules_applied: &[],
+        ruleset_version: RULESET_VERSION,
         config: &config,
         decision: &decision,
     });

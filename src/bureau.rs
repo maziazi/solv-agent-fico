@@ -431,10 +431,28 @@ async fn run_job(
             // can use the result.
             shared.spend(settled.eval.credits_charged);
             match apply_settled(&store, &job.request, &settled.eval_id, &settled.eval) {
-                Ok(()) => JobStatus::Settled {
-                    eval_id: settled.eval_id,
-                    reppo_score: settled.eval.reppo_score,
-                },
+                Ok(()) => {
+                    // Low-scoring critiques become `shadow` rules (SPEC
+                    // §5.5). Off the hot path, and a critique that yields
+                    // nothing never fails the job.
+                    let report = crate::rules::distil_into_store(
+                        &store,
+                        &settled.eval_id,
+                        &settled.eval.verdicts,
+                    );
+                    if !report.created.is_empty() {
+                        eprintln!(
+                            "solv: evaluation {} produced shadow rules {}",
+                            settled.eval_id,
+                            report.created.join(", ")
+                        );
+                        store.request_snapshot();
+                    }
+                    JobStatus::Settled {
+                        eval_id: settled.eval_id,
+                        reppo_score: settled.eval.reppo_score,
+                    }
+                }
                 Err(reason) => {
                     eprintln!("solv: audit job {} failed: {reason}", job.id);
                     JobStatus::Failed { reason }

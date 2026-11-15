@@ -34,6 +34,7 @@ fn snapshot_roundtrip_survives_restart() {
     store.set_learned_rules(vec![LearnedRule {
         rule_id: "SOLV-RULE-001".to_string(),
         status: RuleStatus::Shadow,
+        ..LearnedRule::default()
     }]);
     store.write_snapshot_now().unwrap();
     drop(store);
