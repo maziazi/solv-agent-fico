@@ -26,7 +26,7 @@ function Unrated({ what }: { what: string }): JSX.Element {
   return (
     <div className="border border-dashed border-border bg-bg p-4 text-sm">
       <p className="font-medium">
-        <span className="font-mono">UNRATED</span> — no evidence on file for “{what}”.
+        <span className="font-mono">UNRATED</span>: no evidence on file for “{what}”.
       </p>
       <p className="mt-1 text-muted">
         That is an absence of evidence, not bad evidence. Solv holds no score
@@ -248,7 +248,7 @@ function Rated({
           <span className="font-mono">{usd(entry.last_decision.amount_usd)}</span>
           <a
             href={entry.last_decision.receipt_url}
-            className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
+            className="font-mono text-xs text-accent-ink underline decoration-accent decoration-1 underline-offset-2"
           >
             receipt ↗
           </a>

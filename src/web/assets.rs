@@ -70,18 +70,46 @@ pub const ASSETS: &[Asset] = &[
         bytes: include_bytes!("../../frontend/dist/spa.css"),
     },
     Asset {
-        path: "fonts/inter-var-latin.woff2",
+        path: "fonts/ibm-plex-sans-latin-400-normal.woff2",
         content_type: "font/woff2",
         csp: NO_EXTERNAL_FETCHES,
         cache: "public, max-age=604800",
-        bytes: include_bytes!("../../frontend/dist/fonts/inter-var-latin.woff2"),
+        bytes: include_bytes!("../../frontend/dist/fonts/ibm-plex-sans-latin-400-normal.woff2"),
     },
     Asset {
-        path: "fonts/jetbrains-mono-var-latin.woff2",
+        path: "fonts/ibm-plex-sans-latin-500-normal.woff2",
         content_type: "font/woff2",
         csp: NO_EXTERNAL_FETCHES,
         cache: "public, max-age=604800",
-        bytes: include_bytes!("../../frontend/dist/fonts/jetbrains-mono-var-latin.woff2"),
+        bytes: include_bytes!("../../frontend/dist/fonts/ibm-plex-sans-latin-500-normal.woff2"),
+    },
+    Asset {
+        path: "fonts/ibm-plex-sans-latin-600-normal.woff2",
+        content_type: "font/woff2",
+        csp: NO_EXTERNAL_FETCHES,
+        cache: "public, max-age=604800",
+        bytes: include_bytes!("../../frontend/dist/fonts/ibm-plex-sans-latin-600-normal.woff2"),
+    },
+    Asset {
+        path: "fonts/ibm-plex-sans-latin-700-normal.woff2",
+        content_type: "font/woff2",
+        csp: NO_EXTERNAL_FETCHES,
+        cache: "public, max-age=604800",
+        bytes: include_bytes!("../../frontend/dist/fonts/ibm-plex-sans-latin-700-normal.woff2"),
+    },
+    Asset {
+        path: "fonts/ibm-plex-mono-latin-400-normal.woff2",
+        content_type: "font/woff2",
+        csp: NO_EXTERNAL_FETCHES,
+        cache: "public, max-age=604800",
+        bytes: include_bytes!("../../frontend/dist/fonts/ibm-plex-mono-latin-400-normal.woff2"),
+    },
+    Asset {
+        path: "fonts/ibm-plex-mono-latin-500-normal.woff2",
+        content_type: "font/woff2",
+        csp: NO_EXTERNAL_FETCHES,
+        cache: "public, max-age=604800",
+        bytes: include_bytes!("../../frontend/dist/fonts/ibm-plex-mono-latin-500-normal.woff2"),
     },
     // The fonts ride the SIL OFL 1.1; the license text ships next to them.
     Asset {
@@ -90,13 +118,6 @@ pub const ASSETS: &[Asset] = &[
         csp: NO_EXTERNAL_FETCHES,
         cache: "public, max-age=604800",
         bytes: include_bytes!("../../frontend/public/fonts/OFL-1.1.txt"),
-    },
-    Asset {
-        path: "fonts/space-grotesk-var-latin.woff2",
-        content_type: "font/woff2",
-        csp: NO_EXTERNAL_FETCHES,
-        cache: "public, max-age=604800",
-        bytes: include_bytes!("../../frontend/dist/fonts/space-grotesk-var-latin.woff2"),
     },
 ];
 
@@ -198,7 +219,11 @@ mod tests {
 
     #[test]
     fn the_spa_bundle_and_stylesheet_exist_in_the_frontend_build() {
-        for path in ["spa.js", "spa.css", "fonts/inter-var-latin.woff2"] {
+        for path in [
+            "spa.js",
+            "spa.css",
+            "fonts/ibm-plex-sans-latin-400-normal.woff2",
+        ] {
             let asset = ASSETS
                 .iter()
                 .find(|asset| asset.path == path)

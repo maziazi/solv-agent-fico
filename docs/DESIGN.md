@@ -40,57 +40,57 @@ argument is that it is a record.
 
 ## 2. Colour
 
-Two themes. Light is the default; it is the one that reads as a document.
+One theme, light only. The palette is taken from reppo.xyz's published
+stylesheet (2026-11-16): warm paper background, dark brown ink, an orange accent
+and a 12 px radius. There is no dark theme in v2.
 
-### 2.1 Warm Ledger (light)
+### 2.1 Light palette
 
 | Role | Hex | Use |
 | --- | --- | --- |
-| Background | `#F8F7F4` | Page. Warm alabaster, audit paper. |
+| Background | `#F9F7F6` | Page |
 | Surface | `#FFFFFF` | Cards and panels |
-| Border | `#E2E0D8` | 1px, solid, everywhere. The primary structural device. |
-| Ink | `#141413` | Primary text, all numerals |
-| Muted | `#5C5B57` | Secondary text, labels, units |
-| Accent | `#D95D39` | Terracotta. See the constraint in §2.3. |
-| Accent fill | `#A8431F` | Darkened terracotta for buttons with white text |
+| Wash | `#EFEDEB` | Footer, quiet bands, hover rows |
+| Border | `#E3E0DD` | 1px, solid. The primary structural device. |
+| Ink | `#332D28` | Primary text, primary button fill |
+| Muted | `#5A5049` | Secondary text, labels, units |
+| Accent | `#DC5318` | Orange. Large shapes, diagram strokes, large display type. |
+| Accent ink / fill | `#B8420F` | Small accent text, links, buttons with white text |
+| Accent soft | `#F6E3DA` | Selection and soft highlights |
 
-### 2.2 Obsidian Ledger (dark)
+Radius is `0.75rem` on cards, buttons and panels. Page containers are at most
+`80rem` wide with `1.25rem` side padding, `2rem` from 640 px up.
 
-| Role | Hex | Use |
-| --- | --- | --- |
-| Background | `#12110F` | Page |
-| Surface | `#1A1917` | Cards and panels |
-| Border | `#2E2C28` | 1px, solid |
-| Ink | `#F4F2ED` | Primary text, all numerals |
-| Muted | `#A3A09A` | Secondary text |
-| Accent | `#E8734A` | Lifted terracotta; `#D95D39` is too dark on this background |
-
-### 2.3 Contrast: measured, not assumed
+### 2.2 Contrast: computed, not assumed
 
 Ratios computed against WCAG 2.2. AA needs 4.5:1 for normal text, 3:1 for large
-text (≥18.66px bold or ≥24px) and for non-text UI.
+text (at least 18.66 px bold or 24 px) and for non-text UI.
 
 | Pair | Ratio | Verdict |
 | --- | --- | --- |
-| `#141413` on `#F8F7F4` | ~17:1 | Passes AAA |
-| `#5C5B57` on `#F8F7F4` | ~6.1:1 | Passes AA |
-| `#15803D` on `#DCFCE7` | 4.56:1 | Passes AA, narrowly |
-| `#B91C1C` on `#FEE2E2` | 5.29:1 | Passes AA |
+| `#332D28` on `#F9F7F6` | 12.71:1 | Passes AAA |
+| `#332D28` on `#EFEDEB` | 11.63:1 | Passes AAA |
+| `#5A5049` on `#F9F7F6` | 7.34:1 | Passes AAA |
+| `#5A5049` on `#EFEDEB` | 6.71:1 | Passes AA |
+| `#F9F7F6` on `#332D28` (primary button) | 12.71:1 | Passes AAA |
+| `#DC5318` on `#F9F7F6` | **3.71:1** | **Fails AA for normal text** |
+| `#FFFFFF` on `#DC5318` | **3.97:1** | **Fails AA for normal text** |
+| `#B8420F` on `#F9F7F6` | 5.14:1 | Passes AA |
+| `#B8420F` on `#EFEDEB` | 4.70:1 | Passes AA |
+| `#FFFFFF` on `#B8420F` | 5.49:1 | Passes AA |
+| `#15803D` on `#DCFCE7` | 4.57:1 | Passes AA, narrowly |
 | `#B45309` on `#FEF3C7` | 4.51:1 | Passes AA, narrowly |
-| `#D95D39` on `#FFFFFF` | **3.77:1** | **Fails AA for normal text** |
-| `#FFFFFF` on `#D95D39` | **3.77:1** | **Fails AA for normal text** |
-| `#FFFFFF` on `#A8431F` | 6.01:1 | Passes AA |
+| `#B91C1C` on `#FEE2E2` | 5.30:1 | Passes AA |
+| `#E3E0DD` border on `#F9F7F6` | 1.23:1 | Decorative divider only, never the sole cue |
 
-The constraint this creates, and it is binding:
+The constraint this creates is binding:
 
-- `#D95D39` may be used for **1px borders, large display type, icons, and focus
-  rings** — all of which only need 3:1.
-- `#D95D39` may **not** be used for body text, labels, links, or as a button
-  fill behind white text. Buttons use `#A8431F`.
-
-The three narrow passes (4.51 and 4.56) mean the semantic text colours must not
-be lightened. If a future change wants a softer green, the background has to
-darken to compensate.
+- `#DC5318` may be used for large display type, icons, diagram strokes and fills,
+  and 2 px underlines, all of which only need 3:1.
+- `#DC5318` may not be used for body text, labels or links, nor as a button fill
+  behind white text. Use `#B8420F` for those.
+- The three narrow status passes (4.51 to 4.57) mean the semantic text colours
+  must not be lightened. A softer green needs a darker background.
 
 ### 2.4 Decision colours
 
@@ -111,20 +111,20 @@ users and fails equally in a screenshot pasted into a bug report.
 
 ## 3. Typography
 
-Three faces, each with one job. All three are SIL Open Font License, so they can
-be self-hosted and redistributed; record them in `THIRD_PARTY_NOTICES.md` when
-the first font file lands.
+Two faces, both IBM Plex, matching reppo.xyz. Both are SIL Open Font License, so
+they are self-hosted and redistributed; they are recorded in
+`THIRD_PARTY_NOTICES.md`. The CSP forbids a font CDN, so the files ship inside the
+binary.
 
 | Face | Role | Weights |
 | --- | --- | --- |
-| **Space Grotesk** | Headings, page titles, decision stamps | 500, 700 |
-| **Inter** | Body, reason text, labels, UX copy | 400, 500 |
-| **JetBrains Mono** | Every numeral that is data: FICO, latency, USD, hashes, JSON, reason codes | 400, 500 |
+| **IBM Plex Sans** | Headings, body, labels, buttons | 400, 500, 600, 700 |
+| **IBM Plex Mono** | Every numeral that is data: FICO, latency, USD, hashes, JSON, reason codes | 400, 500 |
 
 The monospace rule is strict and worth stating as a rule rather than a
 preference: **any number a user might compare against another number is set in
-JetBrains Mono.** `FICO 410 / 850`, `142ms`, `$50.00`, a SHA-256 digest. Tabular
-figures make columns align, and alignment is what makes a ledger readable.
+IBM Plex Mono.** `FICO 410 / 850`, `142ms`, `$50.00`, a SHA-256 digest. Alignment
+is what makes a ledger readable.
 
 Scale, 1.25 ratio from a 16px base:
 
@@ -222,7 +222,7 @@ Order down the page:
    evidence says 40 days, in the same type size as the score.
 4. **Four pillars**, 0–10 each, with the Reppo critique quoted beneath each one.
 5. **Reasons.** Every element of `reasons[]` as a row: code in mono, message in
-   Inter, the evidence quote in a bordered block marked
+   IBM Plex Sans, the evidence quote in a bordered block marked
    `untrusted counterparty text`.
 6. **Evidence hash** plus the `canonical_json` recipe, so a third party can
    recompute it.
@@ -258,13 +258,13 @@ pass rate instead — a real number with a real denominator.
 | Component | Construction |
 | --- | --- |
 | **Card** | `#FFFFFF` surface, 1px `#E2E0D8` border, 0 radius or 2px max, no shadow. Depth comes from borders. |
-| **Decision badge** | Semantic background, semantic text, 1px border of the same text colour, uppercase Space Grotesk 500, always with its word |
+| **Decision badge** | Semantic background, semantic text, 1px border of the same text colour, uppercase IBM Plex Sans 500, always with its word |
 | **Metric tile** | Mono numeral at `display` or `h1`, `small` muted label above, verification label as `micro` below |
-| **Pipeline node** | Row: name (Inter), elapsed ms (mono, right-aligned), state glyph, optional detail. Skipped nodes are `#5C5B57` with their reason. |
-| **Reason row** | Code (mono `micro`), message (Inter `body`), effect chip, evidence block if present |
+| **Pipeline node** | Row: name (IBM Plex Sans), elapsed ms (mono, right-aligned), state glyph, optional detail. Skipped nodes are `#5C5B57` with their reason. |
+| **Reason row** | Code (mono `micro`), message (IBM Plex Sans `body`), effect chip, evidence block if present |
 | **Evidence block** | `#F8F7F4` fill, 1px dashed border, mono, prefixed by the label `untrusted counterparty text` |
 | **FICO gauge** | Horizontal track 300→850, tick marks at the four band floors (580, 670, 740, 800), filled to `fico_effective`, `fico_raw` marked with a hairline when decay is nonzero |
-| **Primary button** | `#A8431F` fill, white text, 1px darker border |
+| **Primary button** | Ink `#332D28` fill, `#F9F7F6` text, 12 px radius |
 | **Focus ring** | 2px `#D95D39` offset 2px. Never removed. |
 
 ### 5.1 Motion

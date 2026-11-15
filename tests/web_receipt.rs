@@ -663,7 +663,20 @@ async fn stylesheet_is_served_locally_and_pulls_nothing_from_elsewhere() {
     assert!(header(&headers, "content-type").starts_with("text/css"));
     assert_eq!(header(&headers, "x-content-type-options"), "nosniff");
     assert!(!css.contains("@import") && !css.contains("http://") && !css.contains("https://"));
-    assert!(!css.contains("url("), "no external or inline resources");
+    // The only resources the stylesheet may name are the self-hosted fonts:
+    // a quoted same-origin /static/fonts/*.woff2 path. Anything else
+    // (data: URIs, other paths, other origins) is still refused.
+    let mut rest = css.as_str();
+    while let Some(at) = rest.find("url(") {
+        let after = &rest[at + 4..];
+        let end = after.find(')').expect("unterminated url(");
+        let target = &after[..end];
+        assert!(
+            target.starts_with("\"/static/fonts/") && target.ends_with(".woff2\""),
+            "only self-hosted fonts may be referenced, found url({target})"
+        );
+        rest = &after[end + 1..];
+    }
 }
 
 // ---------------------------------------------------------------------------

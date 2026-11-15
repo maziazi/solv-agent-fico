@@ -74,7 +74,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
 
       {entries.length === 0 ? (
         <p className="mt-4 border border-dashed border-border bg-bg p-4 text-sm text-muted">
-          No counterparty has a settled profile yet — an entry appears once a
+          No counterparty has a settled profile yet. An entry appears once a
           Reppo evaluation settles for it (SPEC §5.3). Every check run on{" "}
           <Link to="/desk" className="underline decoration-1 underline-offset-2">
             the desk
@@ -134,7 +134,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
                         <span className="font-mono text-sm">{usd(entry.last_decision.amount_usd)}</span>
                         <a
                           href={entry.last_decision.receipt_url}
-                          className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
+                          className="font-mono text-xs text-accent-ink underline decoration-accent decoration-1 underline-offset-2"
                         >
                           receipt ↗
                         </a>
@@ -169,7 +169,7 @@ function Guardrails({ rules }: { rules: LearnedRuleEntry[] }): JSX.Element {
 
       {rules.length === 0 ? (
         <p className="border border-dashed border-border bg-bg p-4 text-sm text-muted">
-          No rules learned yet — none distilled, none promoted.
+          No rules learned yet. None distilled, none promoted.
         </p>
       ) : (
         <ul className="border-t border-border">
@@ -182,7 +182,7 @@ function Guardrails({ rules }: { rules: LearnedRuleEntry[] }): JSX.Element {
                 <span className="font-mono text-xs text-muted">p ≥ {rule.threshold}</span>
                 {rule.status === "shadow" ? (
                   <span className="border border-hold-ink bg-hold-bg px-1.5 py-px font-mono text-xs text-hold-ink">
-                    shadow — not enforcing
+                    shadow, not enforcing
                   </span>
                 ) : (
                   <span className="border border-approve-ink bg-approve-bg px-1.5 py-px font-mono text-xs text-approve-ink">
@@ -227,10 +227,9 @@ function QuotaMeter({ response }: { response: DirectoryResponse }): JSX.Element 
         </p>
       ) : (
         <p className="mt-2 border border-dashed border-border bg-bg p-4 text-sm text-muted">
-          Audit worker not attached to this instance — no credits are in use
-          and there is no quota to meter. The free quota is {reppo.quota_total}{" "}
-          credits; one completed evaluation charges 440 (about $0.22). A new
-          Reppo account starts with a one-time 22,000.
+          The audit worker is not attached to this instance, so no credits are
+          in use. A completed Reppo evaluation charges 440 credits (about
+          $0.22). A new Reppo account starts with 22,000 credits, once.
         </p>
       )}
     </section>
@@ -256,26 +255,24 @@ export function ExplorerPage(): JSX.Element {
   }, []);
 
   return (
-    <div className="mx-auto max-w-[76rem] px-4 py-8 sm:px-6">
+    <div className="wrap py-8">
       <header className="mb-6">
         <h1 className="font-head text-3xl font-bold tracking-tight">Explorer</h1>
         <p className="mt-1 max-w-3xl text-sm text-muted">
-          Every counterparty the registry has a settled score for, the
-          guardrails the gate is currently carrying, and the evaluation quota
-          behind them. Numbers come from real receipts — the{" "}
+          Every counterparty with a settled score, the learned rules the gate
+          carries, and the audit quota. The{" "}
           <Link to="/desk" className="underline decoration-1 underline-offset-2">
             desk
           </Link>{" "}
-          produces them, and each one is addressable and verifiable.
+          produces the receipts behind the numbers.
         </p>
         <p className="mt-2 max-w-3xl border-l-2 border-hold-ink bg-hold-bg/40 py-2 pl-4 text-sm">
           <span className="font-mono text-xs uppercase tracking-wider text-hold-ink">
             limitation
-          </span>{" "}
-          — a score attaches to a claimed name and URL, not to a verified
-          identity such as a domain or a wallet, so a name can be impersonated.
-          Binding is planned. Compare the URL here with the one you are about
-          to pay.
+          </span>{": "}
+          A score attaches to a claimed name and URL, not to a verified
+          identity, so a name can be impersonated. Compare the URL here with
+          the one you are about to pay.
         </p>
       </header>
 
