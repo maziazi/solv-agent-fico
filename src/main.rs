@@ -1,5 +1,6 @@
 use solv::state::Store;
 use solv::tier1::{ClefClient, CloudflareClefClient, UnconfiguredClefClient};
+use solv::tier2::{ServClient, ServReasoningClient, UnconfiguredServClient};
 use solv::{AppState, resolve_port, resolve_state_file, run_server};
 
 /// Resolves on Ctrl-C (any platform) or SIGTERM (Unix), whichever first.
@@ -56,7 +57,14 @@ async fn main() {
             std::sync::Arc::new(UnconfiguredClefClient)
         }
     };
-    let state = AppState::new(store, tier1);
+    let tier2: std::sync::Arc<dyn ServClient> = match ServReasoningClient::from_env() {
+        Some(client) => std::sync::Arc::new(client),
+        None => {
+            eprintln!("solv: SERV_API_KEY not set; escalated checks will fail closed");
+            std::sync::Arc::new(UnconfiguredServClient)
+        }
+    };
+    let state = AppState::new(store, tier1, tier2);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await

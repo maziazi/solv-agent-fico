@@ -9,6 +9,7 @@ pub mod reason;
 pub mod score;
 pub mod state;
 pub mod tier1;
+pub mod tier2;
 
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use axum::{Json, Router};
 use serde::Serialize;
 use state::Store;
 use tier1::ClefClient;
+use tier2::ServClient;
 
 /// Listen port used when `PORT` is unset or empty (README "Development").
 pub const DEFAULT_PORT: u16 = 8080;
@@ -26,16 +28,21 @@ pub const DEFAULT_PORT: u16 = 8080;
 pub const DEFAULT_STATE_FILE: &str = "solv_state.json";
 
 /// Shared application state handed to every handler: the state store and
-/// the Tier 1 client behind its trait.
+/// the two tier clients behind their traits.
 #[derive(Clone)]
 pub struct AppState {
     store: Arc<Store>,
     tier1: Arc<dyn ClefClient>,
+    tier2: Arc<dyn ServClient>,
 }
 
 impl AppState {
-    pub fn new(store: Arc<Store>, tier1: Arc<dyn ClefClient>) -> Self {
-        Self { store, tier1 }
+    pub fn new(store: Arc<Store>, tier1: Arc<dyn ClefClient>, tier2: Arc<dyn ServClient>) -> Self {
+        Self {
+            store,
+            tier1,
+            tier2,
+        }
     }
 
     pub fn store(&self) -> &Arc<Store> {
@@ -44,6 +51,10 @@ impl AppState {
 
     pub fn tier1(&self) -> &Arc<dyn ClefClient> {
         &self.tier1
+    }
+
+    pub fn tier2(&self) -> &Arc<dyn ServClient> {
+        &self.tier2
     }
 }
 
@@ -149,7 +160,9 @@ mod tests {
         let store = Store::open(dir.path().join("state.json")).unwrap();
         let tier1: std::sync::Arc<dyn ClefClient> =
             std::sync::Arc::new(tier1::MockClefClient::default());
-        (dir, AppState::new(store, tier1))
+        let tier2: std::sync::Arc<dyn ServClient> =
+            std::sync::Arc::new(tier2::MockServClient::default());
+        (dir, AppState::new(store, tier1, tier2))
     }
 
     #[tokio::test]

@@ -12,10 +12,12 @@ async fn healthz_answers_200_over_real_tcp() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.json")).unwrap();
     let tier1: std::sync::Arc<dyn ClefClient> = std::sync::Arc::new(MockClefClient::default());
+    let tier2: std::sync::Arc<dyn solv::tier2::ServClient> =
+        std::sync::Arc::new(solv::tier2::MockServClient::default());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, build_router(AppState::new(store, tier1)))
+        axum::serve(listener, build_router(AppState::new(store, tier1, tier2)))
             .await
             .unwrap();
     });
