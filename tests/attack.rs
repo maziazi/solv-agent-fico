@@ -489,6 +489,7 @@ async fn all_detectors_down_hold_fail_closed_and_never_approve() {
         verdict: None,
         fail_with_status: Some(503),
         delay: None,
+        started: None,
     });
     let response = build_router(AppState::new(store, tier1, tier2))
         .oneshot(

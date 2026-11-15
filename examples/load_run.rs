@@ -35,6 +35,7 @@ async fn main() {
         verdict: Some(ServVerdict::Approve),
         fail_with_status: None,
         delay: None,
+        started: None,
     });
     let state = AppState::new(store, tier1, tier2);
 
