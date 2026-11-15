@@ -1,0 +1,36 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://solv-agent-fico-production.up.railway.app/api/:path*"
+    },
+    {
+      "source": "/receipt/:id",
+      "destination": "https://solv-agent-fico-production.up.railway.app/receipt/:id"
+    },
+    {
+      "source": "/static/app.css",
+      "destination": "https://solv-agent-fico-production.up.railway.app/static/app.css"
+    },
+    {
+      "source": "/static/receipt-verify.js",
+      "destination": "https://solv-agent-fico-production.up.railway.app/static/receipt-verify.js"
+    },
+    {
+      "source": "/static/spa.js",
+      "destination": "/spa.js"
+    },
+    {
+      "source": "/static/spa.css",
+      "destination": "/spa.css"
+    },
+    {
+      "source": "/static/fonts/:path*",
+      "destination": "/fonts/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
