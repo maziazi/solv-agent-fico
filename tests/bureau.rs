@@ -1231,3 +1231,133 @@ async fn an_eval_id_from_the_client_is_sanitized_in_statuses_and_on_the_profile(
     assert!(!stored.chars().any(char::is_control), "{stored:?}");
     assert!(stored.chars().count() <= 200);
 }
+
+#[tokio::test(start_paused = true)]
+async fn transient_poll_errors_are_ridden_out_and_cost_nothing_extra() {
+    // 5xx and 429 on a status read say nothing about the evaluation; the
+    // worker keeps polling and only the settlement is charged.
+    for error in [
+        (|| ReppoError::Status(503)) as fn() -> ReppoError,
+        || ReppoError::Status(429),
+        || ReppoError::Status(500),
+    ] {
+        let (_dir, store) = store();
+        let client = Arc::new(FlakyPoll {
+            inner: MockReppoClient::new(vec![], 0),
+            failures_left: Mutex::new(3),
+            error,
+        });
+        let (bureau, _worker) = spawn(client, &store, funded());
+        let enqueued = bureau.enqueue(request("flicker")).unwrap();
+        let status = wait_terminal(&bureau, &enqueued.job_id).await;
+        assert!(matches!(status, JobStatus::Settled { .. }), "{status:?}");
+        assert_eq!(
+            bureau.credits_remaining(),
+            900,
+            "charged once, on settlement"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_permanent_poll_error_is_not_retried_forever() {
+    // 404 means Reppo does not know this evaluation: no amount of waiting
+    // helps, so the job fails (and the credit is counted) at once.
+    let (_dir, store) = store();
+    let client = Arc::new(FlakyPoll {
+        inner: MockReppoClient::new(vec![], 0),
+        failures_left: Mutex::new(u32::MAX),
+        error: || ReppoError::NotFound,
+    });
+    let (bureau, _worker) = spawn(client, &store, funded());
+    let enqueued = bureau.enqueue(request("vanished")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(reason.contains("poll failed"), "{reason}");
+    assert_eq!(bureau.credits_remaining(), 900);
+}
+
+/// Waits (on the real clock) until `condition` holds, or fails the test.
+async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !condition() {
+        assert!(std::time::Instant::now() < deadline, "never: {what}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_enqueues_never_pass_the_budget_or_the_single_slot() {
+    let (_dir, store) = store();
+    let mock = Arc::new(MockReppoClient::new(vec![], 0));
+    let config = BureauConfig {
+        starting_credits: 500, // five evaluations, not sixteen
+        ..funded()
+    };
+    let (bureau, _worker) = spawn(mock.clone(), &store, config);
+
+    let accepted = AtomicU32::new(0);
+    let refused_for_credit = AtomicU32::new(0);
+    std::thread::scope(|scope| {
+        for n in 0..16 {
+            let bureau = bureau.clone();
+            let accepted = &accepted;
+            let refused_for_credit = &refused_for_credit;
+            scope.spawn(move || match bureau.enqueue(request(&format!("c{n}"))) {
+                Ok(_) => {
+                    accepted.fetch_add(1, Ordering::SeqCst);
+                }
+                Err(EnqueueError::InsufficientCredits { .. }) => {
+                    refused_for_credit.fetch_add(1, Ordering::SeqCst);
+                }
+                Err(other) => panic!("unexpected refusal: {other:?}"),
+            });
+        }
+    });
+    assert_eq!(accepted.load(Ordering::SeqCst), 5, "exactly the budget");
+    assert_eq!(refused_for_credit.load(Ordering::SeqCst), 11);
+
+    // The worker takes one job to Reppo (where it waits out its ten-minute
+    // window on the real clock) and the other four wait their turn.
+    eventually("the worker holds the one slot", || bureau.is_busy()).await;
+    eventually("the first submit reached Reppo", || {
+        mock.submit_calls() == 1
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        mock.submit_calls(),
+        1,
+        "no second evaluation while one is pending"
+    );
+    assert_eq!(mock.conflicts(), 0);
+    assert_eq!(bureau.queued_len(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_enqueues_of_one_counterparty_admit_exactly_one() {
+    let (_dir, store) = store();
+    let (bureau, _worker) = spawn(Arc::new(MockReppoClient::new(vec![], 0)), &store, funded());
+    let accepted = AtomicU32::new(0);
+    let duplicates = AtomicU32::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let bureau = bureau.clone();
+            let accepted = &accepted;
+            let duplicates = &duplicates;
+            scope.spawn(move || match bureau.enqueue(request("one-and-only")) {
+                Ok(_) => {
+                    accepted.fetch_add(1, Ordering::SeqCst);
+                }
+                Err(EnqueueError::AlreadyQueued) => {
+                    duplicates.fetch_add(1, Ordering::SeqCst);
+                }
+                Err(other) => panic!("unexpected refusal: {other:?}"),
+            });
+        }
+    });
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    assert_eq!(duplicates.load(Ordering::SeqCst), 7);
+}
