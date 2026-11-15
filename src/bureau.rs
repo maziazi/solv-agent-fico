@@ -399,6 +399,14 @@ async fn run_worker(shared: Arc<Shared>, client: Arc<dyn ReppoClient>, store: Ar
                     "was cancelled"
                 };
                 eprintln!("solv: audit job {job_id} {what}");
+                // Past submission the evaluation may still be charged, and
+                // we no longer know how the job ended: count it.
+                if matches!(
+                    shared.statuses.get(&job_id).as_deref(),
+                    Some(JobStatus::Submitted { .. })
+                ) {
+                    shared.spend(CREDITS_PER_EVAL);
+                }
                 JobStatus::Failed {
                     reason: format!("audit job {what}"),
                 }
@@ -496,6 +504,9 @@ async fn process_job(
                         ));
                     }
                     Polled::Fatal(reason) => {
+                        // We stop watching an evaluation that may still
+                        // settle, and Reppo charges on settlement: count it.
+                        shared.spend(CREDITS_PER_EVAL);
                         return Err(format!("evaluation {eval_id}: {reason}"));
                     }
                 }

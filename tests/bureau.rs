@@ -1027,3 +1027,141 @@ async fn a_score_is_never_written_onto_a_profile_for_a_different_url() {
         "the evaluation settled, so Reppo charged for it anyway"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_poll_that_gives_up_counts_the_credit_as_possibly_spent() {
+    // The evaluation may settle and be charged after we stop watching it.
+    let (_dir, store) = store();
+    let mock = Arc::new(MockReppoClient::new(vec![], u32::MAX));
+    let (bureau, _worker) = spawn(mock, &store, funded());
+    let enqueued = bureau.enqueue(request("slow")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    assert!(matches!(status, JobStatus::Failed { .. }), "{status:?}");
+    assert_eq!(
+        bureau.credits_remaining(),
+        900,
+        "pessimistic: a PENDING evaluation we abandoned may still be charged"
+    );
+}
+
+/// The first status read resolves the evaluation at the mock (so Reppo's
+/// slot frees up) but reports a permanent error to the worker.
+struct FatalOnFirstPoll {
+    inner: MockReppoClient,
+    armed: Mutex<bool>,
+}
+
+#[async_trait]
+impl ReppoClient for FatalOnFirstPoll {
+    async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
+        self.inner.submit(submission).await
+    }
+
+    async fn status(&self, eval_id: &str) -> Result<EvalStatus, ReppoError> {
+        let armed = std::mem::replace(&mut *self.armed.lock().unwrap(), false);
+        let result = self.inner.status(eval_id).await;
+        if armed {
+            return Err(ReppoError::Unauthorized);
+        }
+        result
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fatal_poll_counts_the_credit_and_the_next_job_still_runs() {
+    let (_dir, store) = store();
+    let client = Arc::new(FatalOnFirstPoll {
+        inner: MockReppoClient::new(vec![], 0),
+        armed: Mutex::new(true),
+    });
+    let (bureau, _worker) = spawn(client, &store, funded());
+    let first = bureau.enqueue(request("fatal")).unwrap();
+    let second = bureau.enqueue(request("healthy")).unwrap();
+
+    let first_status = wait_terminal(&bureau, &first.job_id).await;
+    let JobStatus::Failed { reason } = first_status else {
+        panic!("expected Failed, got {first_status:?}");
+    };
+    assert!(reason.contains("ev_mock_1"), "{reason}");
+    assert!(store.profile("fatal").is_none());
+
+    assert!(matches!(
+        wait_terminal(&bureau, &second.job_id).await,
+        JobStatus::Settled { .. }
+    ));
+    assert!(store.profile("healthy").is_some());
+    assert!(!bureau.is_busy());
+    assert_eq!(
+        bureau.credits_remaining(),
+        800,
+        "the abandoned job and the healthy one each count 100"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_denied_evaluation_is_fatal_and_counted() {
+    struct Denies {
+        inner: MockReppoClient,
+    }
+    #[async_trait]
+    impl ReppoClient for Denies {
+        async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
+            self.inner.submit(submission).await
+        }
+        async fn status(&self, _: &str) -> Result<EvalStatus, ReppoError> {
+            Ok(EvalStatus::Denied)
+        }
+    }
+    let (_dir, store) = store();
+    let client = Arc::new(Denies {
+        inner: MockReppoClient::new(vec![], 0),
+    });
+    let (bureau, _worker) = spawn(client, &store, funded());
+    let enqueued = bureau.enqueue(request("denied")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(reason.contains("denied"), "{reason}");
+    assert_eq!(bureau.credits_remaining(), 900);
+    assert!(store.profile("denied").is_none());
+}
+
+/// Panics inside `status`, after the evaluation was submitted.
+struct PanicsOnPoll {
+    inner: MockReppoClient,
+}
+
+#[async_trait]
+impl ReppoClient for PanicsOnPoll {
+    async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
+        self.inner.submit(submission).await
+    }
+
+    async fn status(&self, _: &str) -> Result<EvalStatus, ReppoError> {
+        panic!("simulated bug while polling");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_that_panics_after_submitting_counts_its_credit() {
+    let (_dir, store) = store();
+    let client = Arc::new(PanicsOnPoll {
+        inner: MockReppoClient::new(vec![], 0),
+    });
+    let (bureau, _worker) = spawn(client, &store, funded());
+    let enqueued = bureau.enqueue(request("boom")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(reason.contains("panicked"), "{reason}");
+    assert_eq!(
+        bureau.credits_remaining(),
+        900,
+        "an evaluation was submitted before the panic, so it may be charged"
+    );
+    assert!(!bureau.is_busy());
+}
