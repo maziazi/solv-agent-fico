@@ -209,9 +209,13 @@
       "expect": {
         "decision": "HOLD",
         "codes": [
-          "SOLV-COLDSTART-001"
+          "SOLV-REASON-002"
         ],
         "span": null
+      },
+      "seed_profile": {
+        "reppo_score": 84.0,
+        "days_ago": 2
       }
     },
     {
@@ -224,9 +228,13 @@
       "expect": {
         "decision": "HOLD",
         "codes": [
-          "SOLV-COLDSTART-001"
+          "SOLV-REASON-002"
         ],
         "span": null
+      },
+      "seed_profile": {
+        "reppo_score": 84.0,
+        "days_ago": 2
       }
     },
     {
@@ -239,9 +247,13 @@
       "expect": {
         "decision": "HOLD",
         "codes": [
-          "SOLV-COLDSTART-001"
+          "SOLV-REASON-002"
         ],
         "span": null
+      },
+      "seed_profile": {
+        "reppo_score": 84.0,
+        "days_ago": 2
       }
     },
     {

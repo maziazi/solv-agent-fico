@@ -194,6 +194,10 @@ fn attack_evidence(
 ) -> Evidence {
     let mut ev = evidence(source, field, detector_output);
     if let Some(span) = crate::spans::injection_span(description) {
+        // §6.1: a quote is shown at most 240 characters, on a character
+        // boundary — and the locator keeps pointing at exactly the quoted
+        // subrange, so honesty survives the cut.
+        let span = crate::spans::clamp_to_chars(span, description, crate::reason::MAX_QUOTE_CHARS);
         ev.locator = Some(span.locator());
         ev.quote = Some(span.quote);
     }

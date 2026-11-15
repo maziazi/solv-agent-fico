@@ -48,7 +48,17 @@ struct Case {
     target_url: String,
     amount_usd: f64,
     description: String,
+    /// Overclaim cases carry a settled PRIME profile so the cold-start row
+    /// (which would mask the mismatch row) does not fire for them.
+    #[serde(default)]
+    seed_profile: Option<SeedProfile>,
     expect: Expect,
+}
+
+#[derive(Debug, Deserialize)]
+struct SeedProfile {
+    reppo_score: f64,
+    days_ago: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +83,28 @@ fn corpus() -> Corpus {
 // ---------------------------------------------------------------------------
 // Content-aware mocks
 // ---------------------------------------------------------------------------
+
+/// Overclaim markers, known to both mocks: the Clef stand-in classifies
+/// them `overclaim` with sub-floor confidence (SPEC §5.1 rule 2: escalate),
+/// and the SERV stand-in reasons to a verdict mismatch (taxonomy
+/// §6.2 `SOLV-REASON-002`).
+const OVERCLAIM_MARKERS: &[&str] = &[
+    "guaranteed",
+    "zero risk",
+    "most reliable",
+    "strongest",
+    "spotless",
+    "since 20",
+    "trusted by",
+    "industry-standard",
+];
+
+fn claims_unsupported_overclaim(description: &str) -> bool {
+    let lowered = description.to_ascii_lowercase();
+    OVERCLAIM_MARKERS
+        .iter()
+        .any(|marker| lowered.contains(marker))
+}
 
 /// Stands in for Clef-flash: a decision model over typed answers. It sees
 /// verbatim and homoglyph-layered attacks; base64 and zero-width layering
@@ -130,7 +162,16 @@ impl ClefClient for AttackClef {
                     json!({ "choice": "none", "confidence": 0.97 }),
                 );
             }
-            // Base64 runs are simply not seen.
+            // Base64 runs are simply not seen; suspected overclaim with a
+            // sub-floor confidence escalates instead of deciding (SPEC
+            // §5.1 rule 2), so the SERV guard reasons on it.
+            _ if claims_unsupported_overclaim(&request.state.service_description) => {
+                answers.insert("injection".to_string(), json!({ "probability_true": 0.02 }));
+                answers.insert(
+                    "risk_class".to_string(),
+                    json!({ "choice": "overclaim", "confidence": 0.80 }),
+                );
+            }
             _ => {
                 answers.insert("injection".to_string(), json!({ "probability_true": 0.03 }));
                 answers.insert(
@@ -157,6 +198,9 @@ impl ServClient for AttackGuard {
             Some(found) if found.normalisation == solv::spans::Normalisation::Base64Decoded => {
                 Ok(ServVerdict::GuardRefusal)
             }
+            _ if claims_unsupported_overclaim(&ask.service_description) => {
+                Ok(ServVerdict::Mismatch)
+            }
             _ => Ok(ServVerdict::Approve),
         }
     }
@@ -167,6 +211,10 @@ impl ServClient for AttackGuard {
 // ---------------------------------------------------------------------------
 
 fn router() -> axum::Router {
+    router_with_seed(None)
+}
+
+fn router_with_seed(seed: Option<(&str, f64, u64)>) -> axum::Router {
     let store = Store::open(std::env::temp_dir().join(format!(
         "solv_attack_{}_{}.json",
         std::process::id(),
@@ -176,6 +224,27 @@ fn router() -> axum::Router {
             .as_nanos()
     )))
     .expect("throwaway store opens");
+    if let Some((counterparty_id, reppo_score, days_ago)) = seed {
+        let now = solv::api::now_unix();
+        store.upsert_profile(
+            counterparty_id.to_string(),
+            solv::state::Profile {
+                counterparty_name: counterparty_id.to_string(),
+                target_url: String::new(),
+                score: Some(solv::score::SettledScore {
+                    reppo_score,
+                    eval_id: "ev_seed".to_string(),
+                    settled_at_unix: now - days_ago * 86_400,
+                    pillars: solv::score::Pillars {
+                        reliability: 8,
+                        track_record: 8,
+                        safety: 8,
+                        maturity: 8,
+                    },
+                }),
+            },
+        );
+    }
     let state = AppState::new(store, Arc::new(AttackClef), Arc::new(AttackGuard));
     build_router(state)
 }
@@ -242,7 +311,7 @@ fn assert_span_honesty(case: &Case, reasons: &[Value]) {
             expect.note
         );
     }
-    // "chars N-M" up to the first ';' is the verbatim raw span.
+    // "chars N-M" up to the first ';' locates the span in characters.
     let offsets = locator
         .split(';')
         .next()
@@ -253,17 +322,21 @@ fn assert_span_honesty(case: &Case, reasons: &[Value]) {
     let (start, end) = offsets.split_once('-').expect("chars N-M");
     let start: usize = start.parse().expect("numeric start");
     let end: usize = end.parse().expect("numeric end");
+    let rebuilt: String = case
+        .description
+        .chars()
+        .skip(start)
+        .take(end - start)
+        .collect();
     assert_eq!(
-        &case.description[start..end],
-        quote,
+        rebuilt, quote,
         "case {}: the quote must be the verbatim span at the locator",
         case.id
     );
     assert!(
         quote.contains(&expect.contains),
-        "case {}: quote {:?} must contain the attack fragment",
-        case.id,
-        quote
+        "case {}: quote {quote:?} must contain the attack fragment",
+        case.id
     );
 }
 
@@ -284,7 +357,17 @@ async fn the_corpus_never_approves_and_every_reason_holds() {
     assert_eq!(per_category["encoding-layered"], 3);
 
     for case in &corpus.cases {
-        let decision = run_case(router(), case).await;
+        // Overclaim cases run against a settled PRIME profile so the
+        // cold-start row does not mask the mismatch row that holds them.
+        let router = match case.seed_profile.as_ref() {
+            Some(seed) => router_with_seed(Some((
+                case.counterparty_name.as_str(),
+                seed.reppo_score,
+                seed.days_ago,
+            ))),
+            None => router(),
+        };
+        let decision = run_case(router, case).await;
         assert_ne!(
             decision["decision"], "APPROVE",
             "case {} was approved: {decision}",
