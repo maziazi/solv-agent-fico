@@ -134,3 +134,8 @@ export interface PreSpendCheckRequest {
   amount_usd: number;
   service_description: string;
 }
+
+// GET /api/v1/receipt/:id: the decision response plus the stored timestamp.
+export interface ReceiptResponse extends PreSpendCheckResponse {
+  created_at: string;
+}

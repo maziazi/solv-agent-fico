@@ -2,11 +2,15 @@
 # committed, so no Node toolchain exists in either stage (docs/DESIGN.md §6).
 # Every directory include_str!/include_bytes! reads must be copied: src,
 # static, templates, frontend/dist (the built SPA) and frontend/public (the
-# font licence text embedded next to the fonts).
+# font licence text embedded next to the fonts). benches/ is copied too:
+# Cargo.toml declares a [[bench]], and cargo refuses to parse the manifest
+# when its file is missing, even for a plain `cargo build --release`.
 FROM rust:1-bookworm AS build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
+COPY seed ./seed
 COPY static ./static
 COPY templates ./templates
 COPY frontend/dist ./frontend/dist
@@ -18,6 +22,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/release/solv /usr/local/bin/solv
+# Opt-in demo seed (SOLV_SEED_FILE); read-only, never written by the app.
+COPY --from=build /app/seed /usr/local/share/solv/seed
 # The state file's default name resolves inside the workdir, so snapshot
 # writes land somewhere the unprivileged runtime user can write. A durable
 # volume is the eventual answer; until then restarts lose nothing but the

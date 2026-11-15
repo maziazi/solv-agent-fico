@@ -40,57 +40,64 @@ argument is that it is a record.
 
 ## 2. Colour
 
-Two themes. Light is the default; it is the one that reads as a document.
+One theme, light only. The palette is taken from reppo.xyz's published
+stylesheet (2026-11-16): warm paper background, dark brown ink, an orange accent
+and a 12 px radius. There is no dark theme in v2.
 
-### 2.1 Warm Ledger (light)
-
-| Role | Hex | Use |
-| --- | --- | --- |
-| Background | `#F8F7F4` | Page. Warm alabaster, audit paper. |
-| Surface | `#FFFFFF` | Cards and panels |
-| Border | `#E2E0D8` | 1px, solid, everywhere. The primary structural device. |
-| Ink | `#141413` | Primary text, all numerals |
-| Muted | `#5C5B57` | Secondary text, labels, units |
-| Accent | `#D95D39` | Terracotta. See the constraint in §2.3. |
-| Accent fill | `#A8431F` | Darkened terracotta for buttons with white text |
-
-### 2.2 Obsidian Ledger (dark)
+### 2.1 Light palette
 
 | Role | Hex | Use |
 | --- | --- | --- |
-| Background | `#12110F` | Page |
-| Surface | `#1A1917` | Cards and panels |
-| Border | `#2E2C28` | 1px, solid |
-| Ink | `#F4F2ED` | Primary text, all numerals |
-| Muted | `#A3A09A` | Secondary text |
-| Accent | `#E8734A` | Lifted terracotta; `#D95D39` is too dark on this background |
+| Background | `#F9F7F6` | Page |
+| Surface | `#EFEDEB` | Cards and panels: one solid fill, no border |
+| Wash | `#EFEDEB` | Header, footer, quiet sections. A card inside a wash section takes the page colour, so a section shows two fills at most. |
+| Ink | `#332D28` | Primary text, primary button fill |
+| Muted | `#5A5049` | Secondary text, labels, units |
+| Accent | `#DC5318` | Orange. Large shapes, diagram strokes, large display type. |
+| Accent ink / fill | `#B8420F` | Small accent text, links, buttons with white text |
 
-### 2.3 Contrast: measured, not assumed
+**Flat rule.** No borders, no shadows, no gradients and no translucent tints on
+cards, panels, badges or inputs. A shape is told apart by its fill and its
+spacing. Focus is shown with an outline, never a border. The one exception to
+single fills is the five-step band scale, which uses solid hex steps of the
+accent because a scale needs five distinguishable values.
+
+Radius is `0.75rem` on cards, buttons and panels. Page containers are at most
+`80rem` wide with `1.25rem` side padding, `2rem` from 640 px up.
+
+### 2.2 Contrast: computed, not assumed
 
 Ratios computed against WCAG 2.2. AA needs 4.5:1 for normal text, 3:1 for large
-text (≥18.66px bold or ≥24px) and for non-text UI.
+text (at least 18.66 px bold or 24 px) and for non-text UI.
 
 | Pair | Ratio | Verdict |
 | --- | --- | --- |
-| `#141413` on `#F8F7F4` | ~17:1 | Passes AAA |
-| `#5C5B57` on `#F8F7F4` | ~6.1:1 | Passes AA |
-| `#15803D` on `#DCFCE7` | 4.56:1 | Passes AA, narrowly |
-| `#B91C1C` on `#FEE2E2` | 5.29:1 | Passes AA |
-| `#B45309` on `#FEF3C7` | 4.51:1 | Passes AA, narrowly |
-| `#D95D39` on `#FFFFFF` | **3.77:1** | **Fails AA for normal text** |
-| `#FFFFFF` on `#D95D39` | **3.77:1** | **Fails AA for normal text** |
-| `#FFFFFF` on `#A8431F` | 6.01:1 | Passes AA |
+| `#332D28` on `#F9F7F6` | 12.71:1 | Passes AAA |
+| `#332D28` on `#EFEDEB` | 11.63:1 | Passes AAA |
+| `#5A5049` on `#F9F7F6` | 7.34:1 | Passes AAA |
+| `#5A5049` on `#EFEDEB` | 6.71:1 | Passes AA |
+| `#F9F7F6` on `#332D28` (primary button) | 12.71:1 | Passes AAA |
+| `#DC5318` on `#F9F7F6` | **3.71:1** | **Fails AA for normal text** |
+| `#FFFFFF` on `#DC5318` | **3.97:1** | **Fails AA for normal text** |
+| `#B8420F` on `#F9F7F6` | 5.14:1 | Passes AA |
+| `#B8420F` on `#EFEDEB` | 4.70:1 | Passes AA |
+| `#FFFFFF` on `#B8420F` | 5.49:1 | Passes AA |
+| `#FFFFFF` on `#166534` (APPROVE fill) | 7.13:1 | Passes AAA |
+| `#FFFFFF` on `#B91C1C` (BLOCK fill) | 6.47:1 | Passes AA |
+| `#332D28` on `#F2B13C` (HOLD fill) | 7.20:1 | Passes AAA |
+| `#166534` text on `#EFEDEB` | 6.11:1 | Passes AA |
+| `#B91C1C` text on `#EFEDEB` | 5.54:1 | Passes AA |
+| `#92400E` text on `#EFEDEB` | 6.07:1 | Passes AA |
 
-The constraint this creates, and it is binding:
+The constraint this creates is binding:
 
-- `#D95D39` may be used for **1px borders, large display type, icons, and focus
-  rings** — all of which only need 3:1.
-- `#D95D39` may **not** be used for body text, labels, links, or as a button
-  fill behind white text. Buttons use `#A8431F`.
-
-The three narrow passes (4.51 and 4.56) mean the semantic text colours must not
-be lightened. If a future change wants a softer green, the background has to
-darken to compensate.
+- `#DC5318` may be used for large display type, icons, diagram strokes and fills,
+  and 2 px underlines, all of which only need 3:1.
+- `#DC5318` may not be used for body text, labels or links, nor as a button fill
+  behind white text. Use `#B8420F` for those.
+- Status fills are solid. White text sits on green and red, ink text on amber.
+  Do not pair a status colour with a pale tint of itself; that pairing is what
+  the flat rule removes.
 
 ### 2.4 Decision colours
 
@@ -99,9 +106,9 @@ the three decision values in `docs/SPEC.md` §4.3.
 
 | Decision | Text | Background | Also means |
 | --- | --- | --- | --- |
-| `APPROVE` | `#15803D` | `#DCFCE7` | `EXCEPTIONAL`/`VERY_GOOD` tier |
-| `HOLD` | `#B45309` | `#FEF3C7` | `UNRATED`, cold start, cap exceeded |
-| `BLOCK` | `#B91C1C` | `#FEE2E2` | `POOR`, injection detected |
+| `APPROVE` | `#FFFFFF` | `#166534` | `EXCEPTIONAL`/`VERY_GOOD` tier |
+| `HOLD` | `#332D28` | `#F2B13C` | `UNRATED`, cold start, cap exceeded |
+| `BLOCK` | `#FFFFFF` | `#B91C1C` | `POOR`, injection detected |
 
 Colour is never the only signal. Every decision badge carries its word, and
 every reason row carries its code. A red badge with no text fails for colour-blind
@@ -111,20 +118,20 @@ users and fails equally in a screenshot pasted into a bug report.
 
 ## 3. Typography
 
-Three faces, each with one job. All three are SIL Open Font License, so they can
-be self-hosted and redistributed; record them in `THIRD_PARTY_NOTICES.md` when
-the first font file lands.
+Two faces, both IBM Plex, matching reppo.xyz. Both are SIL Open Font License, so
+they are self-hosted and redistributed; they are recorded in
+`THIRD_PARTY_NOTICES.md`. The CSP forbids a font CDN, so the files ship inside the
+binary.
 
 | Face | Role | Weights |
 | --- | --- | --- |
-| **Space Grotesk** | Headings, page titles, decision stamps | 500, 700 |
-| **Inter** | Body, reason text, labels, UX copy | 400, 500 |
-| **JetBrains Mono** | Every numeral that is data: FICO, latency, USD, hashes, JSON, reason codes | 400, 500 |
+| **IBM Plex Sans** | Headings, body, labels, buttons | 400, 500, 600, 700 |
+| **IBM Plex Mono** | Every numeral that is data: FICO, latency, USD, hashes, JSON, reason codes | 400, 500 |
 
 The monospace rule is strict and worth stating as a rule rather than a
 preference: **any number a user might compare against another number is set in
-JetBrains Mono.** `FICO 410 / 850`, `142ms`, `$50.00`, a SHA-256 digest. Tabular
-figures make columns align, and alignment is what makes a ledger readable.
+IBM Plex Mono.** `FICO 410 / 850`, `142ms`, `$50.00`, a SHA-256 digest. Alignment
+is what makes a ledger readable.
 
 Scale, 1.25 ratio from a 16px base:
 
@@ -149,8 +156,9 @@ forward links stay, and the header stays to two words.)*
 
 ### 4.0 Routing (Frontend v2, 2026-11-15)
 
-The navbar is the sitemap: Product ▾ · How it works · Explorer · Docs · Pricing
-· Try the desk. `/` holds the landing page; the desk lives at `/desk` (a form
+The navbar is the sitemap: How it works · See it work · Explorer · Docs · Pricing
+· Try the desk. There is no dropdown; Attack Lab is linked from How it works and
+the footer. `/` holds the landing page; the desk lives at `/desk` (a form
 is the demo, not the front door); the registry and receipts live at
 `/explorer` — the word "bureau" read as institutional jargon and was retired
 from the UI, with `/bureau` kept as a redirect so existing links survive. Every
@@ -222,7 +230,7 @@ Order down the page:
    evidence says 40 days, in the same type size as the score.
 4. **Four pillars**, 0–10 each, with the Reppo critique quoted beneath each one.
 5. **Reasons.** Every element of `reasons[]` as a row: code in mono, message in
-   Inter, the evidence quote in a bordered block marked
+   IBM Plex Sans, the evidence quote in a solid block marked
    `untrusted counterparty text`.
 6. **Evidence hash** plus the `canonical_json` recipe, so a third party can
    recompute it.
@@ -257,14 +265,14 @@ pass rate instead — a real number with a real denominator.
 
 | Component | Construction |
 | --- | --- |
-| **Card** | `#FFFFFF` surface, 1px `#E2E0D8` border, 0 radius or 2px max, no shadow. Depth comes from borders. |
-| **Decision badge** | Semantic background, semantic text, 1px border of the same text colour, uppercase Space Grotesk 500, always with its word |
+| **Card** | One solid fill (`#EFEDEB` on the page, `#F9F7F6` inside a wash section), 12 px radius, no border, no shadow. Emphasis cards are solid ink with page-coloured text. |
+| **Decision badge** | Solid fill from §2.4 with its text colour, no border, 6 px radius, uppercase IBM Plex Sans 500, always with its word |
 | **Metric tile** | Mono numeral at `display` or `h1`, `small` muted label above, verification label as `micro` below |
-| **Pipeline node** | Row: name (Inter), elapsed ms (mono, right-aligned), state glyph, optional detail. Skipped nodes are `#5C5B57` with their reason. |
-| **Reason row** | Code (mono `micro`), message (Inter `body`), effect chip, evidence block if present |
-| **Evidence block** | `#F8F7F4` fill, 1px dashed border, mono, prefixed by the label `untrusted counterparty text` |
+| **Pipeline node** | Row: name (IBM Plex Sans), elapsed ms (mono, right-aligned), state glyph, optional detail. Skipped nodes are `#5C5B57` with their reason. |
+| **Reason row** | Code (mono `micro`), message (IBM Plex Sans `body`), effect chip, evidence block if present |
+| **Evidence block** | Solid `#F9F7F6` fill inside a card, no border, mono, prefixed by the label `untrusted counterparty text` |
 | **FICO gauge** | Horizontal track 300→850, tick marks at the four band floors (580, 670, 740, 800), filled to `fico_effective`, `fico_raw` marked with a hairline when decay is nonzero |
-| **Primary button** | `#A8431F` fill, white text, 1px darker border |
+| **Primary button** | Ink `#332D28` fill, `#F9F7F6` text, 12 px radius |
 | **Focus ring** | 2px `#D95D39` offset 2px. Never removed. |
 
 ### 5.1 Motion

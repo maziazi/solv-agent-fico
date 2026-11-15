@@ -13,9 +13,9 @@ interface MetricTileProps {
 }
 
 const VERIFICATION_CLASS: Record<MetricTileProps["verification"], string> = {
-  MEASURED: "border-approve-ink text-approve-ink",
-  CITED: "border-muted text-muted",
-  UNPROVEN: "border-hold-ink text-hold-ink",
+  MEASURED: "bg-approve-solid text-white",
+  CITED: "bg-ink text-bg",
+  UNPROVEN: "bg-hold-solid text-ink",
 };
 
 export function MetricTile({
@@ -35,7 +35,7 @@ export function MetricTile({
       </p>
       <p className="mt-2 flex items-baseline gap-2">
         <span
-          className={`inline-block border px-1 font-mono text-[10px] tracking-wider ${VERIFICATION_CLASS[verification]}`}
+          className={`inline-block rounded-sm px-1.5 py-px font-mono text-[10px] tracking-wider ${VERIFICATION_CLASS[verification]}`}
         >
           {verification}
         </span>

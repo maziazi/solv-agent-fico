@@ -6,6 +6,7 @@
 pub mod api;
 pub mod bureau;
 pub mod directory;
+pub mod guard;
 pub mod metrics;
 pub mod policy;
 pub mod reason;
@@ -22,6 +23,7 @@ pub mod web;
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use state::Store;
@@ -47,6 +49,12 @@ pub struct AppState {
     /// Resolved once at boot: SPEC §2.1 defaults unless the operator set
     /// `SOLV_LATENCY_CEILING_MS` for a slower route.
     policy_config: policy::PolicyConfig,
+    /// Rate limit and concurrency cap for `pre-spend-check`. `None` (the
+    /// default of [`AppState::new`], which tests build on) means no limit;
+    /// the binary always attaches one built from the operator's settings.
+    limiter: Option<Arc<guard::Limiter>>,
+    /// SHA-256 of `SOLV_ADMIN_TOKEN`. `None` closes `audit-counterparty`.
+    admin_digest: Option<[u8; 32]>,
 }
 
 impl AppState {
@@ -57,7 +65,32 @@ impl AppState {
             tier2,
             bureau: None,
             policy_config: policy::PolicyConfig::default(),
+            limiter: None,
+            admin_digest: None,
         }
+    }
+
+    /// Attaches the public-gate limits (SPEC §8.2).
+    pub fn with_limits(mut self, config: guard::LimitsConfig) -> Self {
+        self.limiter = Some(Arc::new(guard::Limiter::new(config)));
+        self
+    }
+
+    /// Sets the admin token for `audit-counterparty`. `None` or an empty
+    /// string leaves the endpoint closed: every call is refused with 401.
+    pub fn with_admin_token(mut self, token: Option<&str>) -> Self {
+        self.admin_digest = token
+            .filter(|token| !token.is_empty())
+            .map(guard::admin_digest);
+        self
+    }
+
+    pub fn limiter(&self) -> Option<&Arc<guard::Limiter>> {
+        self.limiter.as_ref()
+    }
+
+    pub fn admin_digest(&self) -> Option<&[u8; 32]> {
+        self.admin_digest.as_ref()
     }
 
     /// Overrides the policy configuration (currently only the §2.1 latency
@@ -108,6 +141,7 @@ pub fn build_router(state: AppState) -> Router {
     const SPA_ROUTES: &[&str] = &[
         "/",
         "/desk",
+        "/proof",
         "/explorer",
         "/bureau",
         "/how-it-works",
@@ -118,8 +152,21 @@ pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/v1/directory", get(directory))
-        .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
-        .route("/api/v1/audit-counterparty", post(api::audit_counterparty))
+        .route("/api/v1/agent/{id}", get(api::agent_lookup))
+        .route(
+            "/api/v1/pre-spend-check",
+            post(api::pre_spend_check).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                guard::rate_limit,
+            )),
+        )
+        .route(
+            "/api/v1/audit-counterparty",
+            post(api::audit_counterparty).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                guard::require_admin,
+            )),
+        )
         .route("/api/v1/receipt/{id}", get(receipt::get_receipt));
     let mut app = api.merge(web::routes());
     for path in SPA_ROUTES {
@@ -143,9 +190,13 @@ pub async fn run_server(
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     let store = Arc::clone(state.store());
-    axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    // Connect info carries the socket peer, which the rate limit keys on.
+    axum::serve(
+        listener,
+        build_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await?;
     if let Err(error) = store.write_snapshot_now() {
         eprintln!("solv: final snapshot write failed: {error}");
     }
@@ -212,6 +263,35 @@ mod tests {
         let tier2: std::sync::Arc<dyn ServClient> =
             std::sync::Arc::new(tier2::MockServClient::default());
         (dir, AppState::new(store, tier1, tier2))
+    }
+
+    /// Every page the navbar links to must answer with the SPA shell, so a
+    /// deep link or a refresh never lands on a 404.
+    #[tokio::test]
+    async fn every_frontend_route_serves_the_spa_shell() {
+        let (_dir, state) = test_state();
+        let router = build_router(state);
+        for path in [
+            "/",
+            "/desk",
+            "/proof",
+            "/explorer",
+            "/bureau",
+            "/how-it-works",
+            "/docs",
+            "/pricing",
+            "/attack-lab",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let html = String::from_utf8_lossy(&body);
+            assert!(html.contains("/static/spa.js"), "{path} must be the shell");
+        }
     }
 
     #[tokio::test]
@@ -452,6 +532,10 @@ mod tests {
         assert_eq!(json["metrics"]["receipts_total"], 1);
     }
 
+    /// The admin token the audit tests present; the endpoint is closed
+    /// without one (SPEC §8.2).
+    const ADMIN_TOKEN: &str = "test-admin-token-0123456789";
+
     /// A worker over the scripted mock, with a live credit budget, plus
     /// its temp store. The mock never reaches the network.
     fn test_state_with_worker(credits: u32) -> (tempfile::TempDir, AppState) {
@@ -474,7 +558,12 @@ mod tests {
         };
         let (worker, handle) = Bureau::spawn(client, state.store().clone(), config);
         handle.abort(); // the enqueue path never needs the polling loop
-        (dir, state.with_bureau(Some(Arc::new(worker))))
+        (
+            dir,
+            state
+                .with_bureau(Some(Arc::new(worker)))
+                .with_admin_token(Some(ADMIN_TOKEN)),
+        )
     }
 
     #[tokio::test]
@@ -486,6 +575,7 @@ mod tests {
                     .method("POST")
                     .uri("/api/v1/audit-counterparty")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
                     .body(Body::from(
                         serde_json::json!({
                             "counterparty_id": "datafeed-pro",
@@ -523,6 +613,7 @@ mod tests {
                     .method("POST")
                     .uri("/api/v1/audit-counterparty")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
                     .body(Body::from(
                         serde_json::json!({
                             "counterparty_id": "someone",
@@ -544,12 +635,14 @@ mod tests {
     #[tokio::test]
     async fn audit_endpoint_answers_503_when_the_worker_is_not_attached() {
         let (_dir, state) = test_state();
+        let state = state.with_admin_token(Some(ADMIN_TOKEN));
         let response = build_router(state)
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/v1/audit-counterparty")
                     .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
                     .body(Body::from(
                         serde_json::json!({
                             "counterparty_id": "someone",

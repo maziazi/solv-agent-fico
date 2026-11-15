@@ -127,6 +127,27 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("state file is corrupt: {0}")]
     Corrupt(String),
+    #[error("seed file is invalid: {0}")]
+    Seed(String),
+}
+
+/// What [`Store::seed_from_file`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedOutcome {
+    /// The store was empty and this many profiles were loaded.
+    Loaded(usize),
+    /// The store already had profiles, so the file was not even read.
+    Skipped,
+}
+
+/// The seed file: profiles only, no receipts and no rules. It carries
+/// real settled evaluations (every score names its `eval_id`), never a
+/// snapshot of untrusted counterparty payloads.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedFile {
+    schema_version: u32,
+    counterparties: BTreeMap<CounterpartyId, Profile>,
 }
 
 /// Everything a snapshot contains on disk.
@@ -238,6 +259,44 @@ impl Store {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StateData::default()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Loads demo profiles from `path` when, and only when, the store has no
+    /// profiles yet; existing state is never overwritten. Free hosts wipe the
+    /// disk on restart, and an empty Explorer is a worse first impression
+    /// than an honest seed.
+    ///
+    /// Every profile is validated before any is inserted, so a bad file
+    /// leaves the store untouched. A score without an `eval_id` is refused:
+    /// the seed may only carry scores a real settled evaluation produced
+    /// (SPEC §3.2). The caller treats an error as fatal at startup.
+    pub fn seed_from_file(&self, path: &Path) -> Result<SeedOutcome, StoreError> {
+        if !self.counterparties.is_empty() {
+            return Ok(SeedOutcome::Skipped);
+        }
+        let bytes = fs::read(path).map_err(|error| {
+            StoreError::Seed(format!("cannot read {}: {error}", path.display()))
+        })?;
+        let seed: SeedFile =
+            serde_json::from_slice(&bytes).map_err(|error| StoreError::Seed(error.to_string()))?;
+        if seed.schema_version != SCHEMA_VERSION {
+            return Err(StoreError::Seed(format!(
+                "unsupported schema_version {} (expected {SCHEMA_VERSION})",
+                seed.schema_version
+            )));
+        }
+        if seed.counterparties.is_empty() {
+            return Err(StoreError::Seed("no profiles in the file".to_string()));
+        }
+        for (id, profile) in &seed.counterparties {
+            validate_seed_profile(id, profile).map_err(StoreError::Seed)?;
+        }
+        let count = seed.counterparties.len();
+        for (id, profile) in seed.counterparties {
+            self.counterparties.insert(id, profile);
+        }
+        self.request_snapshot();
+        Ok(SeedOutcome::Loaded(count))
     }
 
     /// Inserts or replaces a counterparty profile.
@@ -505,6 +564,28 @@ fn sync_parent_dir(path: &Path) {
     {
         let _ = path;
     }
+}
+
+/// Seed-profile rules: the key the hot path reads must equal the name, and
+/// a score must name the settled evaluation it came from, in range.
+fn validate_seed_profile(id: &str, profile: &Profile) -> Result<(), String> {
+    if id.is_empty() || id != profile.counterparty_name {
+        return Err(format!(
+            "profile key {id:?} must be non-empty and equal counterparty_name"
+        ));
+    }
+    if profile.target_url.is_empty() {
+        return Err(format!("profile {id:?} has no target_url"));
+    }
+    if let Some(score) = &profile.score {
+        if score.eval_id.trim().is_empty() {
+            return Err(format!("profile {id:?} has a score without an eval_id"));
+        }
+        if !(0.0..=100.0).contains(&score.reppo_score) {
+            return Err(format!("profile {id:?} has reppo_score outside 0-100"));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
