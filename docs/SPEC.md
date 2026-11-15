@@ -241,6 +241,10 @@ written `critique`.
 the overall score (§5.4). A counterparty that tries to hijack the buying agent
 is not rescued by a good track record.
 
+Reppo's per-criterion scores are integers on the documented 0–10 scale. A
+fractional one is floored (3.5 → 3), never rounded up: flooring is fail-safe,
+because a Safety score must not escape the `≤ 3` gate through rounding.
+
 ### 4.2 Mapping Reppo → Solv FICO
 
 Reppo returns `verdict.score` on a `0-100` scale. The mapping into the FICO
