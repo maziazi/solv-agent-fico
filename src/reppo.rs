@@ -25,6 +25,8 @@ use serde_json::{Value, json};
 
 use crate::score::Pillars;
 
+/// A response body larger than this is refused rather than buffered.
+pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// Environment variable that must be `1` before the real client loads.
 pub const ENABLE_ENV: &str = "SOLV_REPPO_ENABLED";
 pub const DEFAULT_BASE_URL: &str = "https://eval.reppo.xyz/api/v1";
@@ -285,7 +287,7 @@ impl ReppoClient for ReppoHttpClient {
         // The evaluation exists by now. If its id cannot be read, the
         // sanitised start of the body goes into the error so an operator
         // can still find the id and recover the evaluation by hand.
-        let bytes = response.bytes().await?;
+        let bytes = read_capped(response).await?;
         let with_snippet = |reason: String| {
             ReppoError::Parse(format!(
                 "{reason}; body starts: {}",
@@ -315,17 +317,42 @@ impl ReppoClient for ReppoHttpClient {
         if !status.is_success() {
             return Err(status_error(status));
         }
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| ReppoError::Parse(error.to_string()))?;
+        let bytes = read_capped(response).await?;
+        let body: Value =
+            serde_json::from_slice(&bytes).map_err(|error| ReppoError::Parse(error.to_string()))?;
         parse_status_response(&body)
     }
+}
+
+/// Reads a response body, refusing more than [`MAX_BODY_BYTES`]. Checked
+/// against `Content-Length` up front and again while chunks arrive, so a
+/// chunked response with no declared length cannot fill memory either.
+async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, ReppoError> {
+    let too_large = || ReppoError::Parse(format!("response body exceeds {MAX_BODY_BYTES} bytes"));
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_BODY_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Reppo's text is untrusted; this much of it is allowed into a log line
 /// or a job status.
 pub const MAX_UNTRUSTED_CHARS: usize = 200;
+/// A critique is stored on the settled evaluation for rule distillation
+/// (SPEC §5.5) and, unlike a failure reason, is never logged or put in a
+/// job status, so it gets more room than [`MAX_UNTRUSTED_CHARS`]. It is
+/// still stripped of control characters and bounded.
+pub const MAX_CRITIQUE_CHARS: usize = 1000;
 /// How much of an unreadable submit response is kept for manual recovery.
 const BODY_SNIPPET_CHARS: usize = 150;
 /// Cap for an error description that carries a recovery snippet: the
@@ -389,6 +416,18 @@ pub fn parse_submit_response(body: &Value) -> Result<String, ReppoError> {
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .ok_or_else(|| ReppoError::Parse("evalId missing".to_string()))?;
+    // An id ends up in a URL, a log line, a status and a public receipt.
+    // Sanitising it would produce a different id that no longer works, so a
+    // malformed one is refused instead.
+    if eval_id.chars().count() > MAX_UNTRUSTED_CHARS
+        || eval_id
+            .chars()
+            .any(|c| c.is_control() || is_invisible_format_char(c))
+    {
+        return Err(ReppoError::Parse(
+            "evalId is not a plain identifier".to_string(),
+        ));
+    }
     Ok(eval_id.to_string())
 }
 
@@ -411,7 +450,7 @@ pub fn parse_status_response(body: &Value) -> Result<EvalStatus, ReppoError> {
             body.get("result")
                 .and_then(|result| result.get("reason"))
                 .and_then(Value::as_str)
-                .map(str::to_string),
+                .map(|reason| sanitize_untrusted(reason, MAX_UNTRUSTED_CHARS)),
         )),
         "SETTLED" => parse_settled(body).map(|settled| EvalStatus::Settled(Box::new(settled))),
         other => Err(ReppoError::Parse(format!("unknown status {other:?}"))),
@@ -480,17 +519,21 @@ fn parse_verdicts(result: &Value) -> Result<Vec<CriterionVerdict>, ReppoError> {
                     ReppoError::Parse("a verdicts[].score is missing or outside 0-10".to_string())
                 })?;
             Ok(CriterionVerdict {
-                criterion: entry
-                    .get("criterion")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                criterion: sanitize_untrusted(
+                    entry
+                        .get("criterion")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    MAX_UNTRUSTED_CHARS,
+                ),
                 score,
-                critique: entry
-                    .get("critique")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                critique: sanitize_untrusted(
+                    entry
+                        .get("critique")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    MAX_CRITIQUE_CHARS,
+                ),
             })
         })
         .collect()

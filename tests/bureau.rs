@@ -1165,3 +1165,69 @@ async fn a_job_that_panics_after_submitting_counts_its_credit() {
     );
     assert!(!bureau.is_busy());
 }
+
+#[tokio::test(start_paused = true)]
+async fn untrusted_failure_text_is_sanitized_before_it_reaches_a_status() {
+    let (_dir, store) = store();
+    let hostile = format!("\u{1b}[31mFORGED STATUS\n{}", "x".repeat(5_000));
+    let outcomes = vec![MockOutcome::FailedWith(hostile); 3];
+    let (bureau, _worker) = spawn(
+        Arc::new(MockReppoClient::new(outcomes, 0)),
+        &store,
+        funded(),
+    );
+    let enqueued = bureau.enqueue(request("noisy")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(!reason.chars().any(char::is_control), "{reason:?}");
+    assert!(reason.chars().count() < 400, "bounded: {}", reason.len());
+    assert!(
+        reason.contains("evaluation ev_mock_3 failed after 3 attempts"),
+        "{reason}"
+    );
+}
+
+/// A client whose submit returns a hostile id, and which maps it back to the
+/// real one when asked for status.
+struct HostileIds {
+    inner: MockReppoClient,
+}
+
+fn hostile_id(real: &str) -> String {
+    format!("{real}\nFORGED LOG LINE {}", "y".repeat(500))
+}
+
+#[async_trait]
+impl ReppoClient for HostileIds {
+    async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
+        Ok(hostile_id(&self.inner.submit(submission).await?))
+    }
+
+    async fn status(&self, eval_id: &str) -> Result<EvalStatus, ReppoError> {
+        let real = eval_id.split('\n').next().unwrap();
+        self.inner.status(real).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_eval_id_from_the_client_is_sanitized_in_statuses_and_on_the_profile() {
+    let (_dir, store) = store();
+    let client = Arc::new(HostileIds {
+        inner: MockReppoClient::new(vec![], 0),
+    });
+    let (bureau, _worker) = spawn(client, &store, funded());
+    let enqueued = bureau.enqueue(request("ids")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    let JobStatus::Settled { eval_id, .. } = status else {
+        panic!("expected Settled, got {status:?}");
+    };
+    assert!(!eval_id.chars().any(char::is_control), "{eval_id:?}");
+    assert!(eval_id.chars().count() <= 200);
+    let stored = store.profile("ids").unwrap().score.unwrap().eval_id;
+    assert!(!stored.chars().any(char::is_control), "{stored:?}");
+    assert!(stored.chars().count() <= 200);
+}

@@ -14,9 +14,9 @@ use axum::routing::{get, post};
 use serde_json::{Value, json};
 use solv::bureau::{AuditRequest, Bureau, BureauConfig, JobStatus};
 use solv::reppo::{
-    ALLOWED_SETTLEMENT_MINUTES, CREDITS_PER_EVAL, EvalStatus, EvalSubmission, MAX_PAYLOAD_BYTES,
-    PILLAR_CRITERIA, ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
-    parse_status_response, sanitize_untrusted,
+    ALLOWED_SETTLEMENT_MINUTES, CREDITS_PER_EVAL, EvalStatus, EvalSubmission, MAX_BODY_BYTES,
+    MAX_PAYLOAD_BYTES, PILLAR_CRITERIA, ReppoClient, ReppoError, ReppoHttpClient, SubmissionError,
+    parse_rfc3339_unix, parse_status_response, parse_submit_response, sanitize_untrusted,
 };
 use solv::score::Pillars;
 use solv::state::Store;
@@ -484,6 +484,158 @@ fn the_client_only_loads_when_a_key_exists_and_the_operator_enabled_it() {
             "key {no_key:?} must not load"
         );
     }
+}
+
+#[test]
+fn reason_critique_and_criterion_are_sanitized_when_parsed() {
+    let hostile = format!("\u{1b}[31mFORGED\n{}", "x".repeat(5_000));
+
+    let EvalStatus::Failed(Some(reason)) = parse_status_response(&json!({
+        "status": "FAILED",
+        "result": { "reason": hostile }
+    }))
+    .unwrap() else {
+        panic!("expected Failed with a reason");
+    };
+    assert!(!reason.chars().any(char::is_control), "{reason:?}");
+    assert_eq!(reason.chars().count(), 200);
+
+    let mut body = settled_body(json!(60), [5.0, 6.0, 7.0, 8.0]);
+    body["result"]["verdicts"][0]["critique"] = json!(hostile);
+    body["result"]["verdicts"][1]["criterion"] = json!(format!("{}\n", PILLAR_CRITERIA[1]));
+    let EvalStatus::Settled(settled) = parse_status_response(&body).unwrap() else {
+        panic!("expected Settled");
+    };
+    let critique = &settled.verdicts[0].critique;
+    assert!(!critique.chars().any(char::is_control));
+    assert_eq!(critique.chars().count(), 1_000);
+    assert_eq!(
+        settled.verdicts[1].criterion, PILLAR_CRITERIA[1],
+        "a stray newline does not stop a criterion from matching its pillar"
+    );
+    assert_eq!(settled.pillars.track_record, 6);
+}
+
+#[test]
+fn an_eval_id_that_is_not_a_plain_identifier_is_refused() {
+    assert_eq!(
+        parse_submit_response(&json!({ "evalId": "ev_abc-123" })).unwrap(),
+        "ev_abc-123"
+    );
+    for bad in [
+        "ev_1\nFORGED LOG LINE".to_string(),
+        "ev_1\u{1b}[31m".to_string(),
+        "e".repeat(201),
+        "ev_1\u{202e}".to_string(),
+    ] {
+        assert!(
+            matches!(
+                parse_submit_response(&json!({ "evalId": bad })),
+                Err(ReppoError::Parse(_))
+            ),
+            "{bad:?} must be refused, not sanitized into a different id"
+        );
+    }
+    assert_eq!(
+        parse_submit_response(&json!({ "evalId": "e".repeat(200) }))
+            .unwrap()
+            .len(),
+        200
+    );
+}
+
+fn padded_pending_body(total_bytes: usize) -> String {
+    let core = r#"{"status":"PENDING"}"#;
+    format!("{core}{}", " ".repeat(total_bytes - core.len()))
+}
+
+#[tokio::test]
+async fn a_response_body_over_one_mebibyte_is_refused_but_exactly_one_is_read() {
+    let at_limit = padded_pending_body(MAX_BODY_BYTES);
+    let over_limit = padded_pending_body(MAX_BODY_BYTES + 1);
+    for (body, accepted) in [(at_limit, true), (over_limit, false)] {
+        let app = axum::Router::new().route(
+            "/agents/eval-requests/{eval_id}",
+            get(move || {
+                let body = body.clone();
+                async move { (StatusCode::OK, body) }
+            }),
+        );
+        let (base, _server) = reppo_server(app).await;
+        let result = client(base).status("ev_1").await;
+        if accepted {
+            assert_eq!(result.unwrap(), EvalStatus::Pending);
+        } else {
+            let Err(ReppoError::Parse(message)) = result else {
+                panic!("expected Parse for an oversize body");
+            };
+            assert!(message.contains("exceeds"), "{message}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_oversize_submit_response_is_refused_too() {
+    let app = axum::Router::new().route(
+        "/agents/eval-requests/submit",
+        post(|| async { (StatusCode::CREATED, "z".repeat(MAX_BODY_BYTES + 1)) }),
+    );
+    let (base, _server) = reppo_server(app).await;
+    assert!(matches!(
+        client(base).submit(&submission()).await,
+        Err(ReppoError::Parse(_))
+    ));
+}
+
+/// Streams a 2 MiB chunked response with no `Content-Length`, so the size
+/// limit has to hold while the body is being read, not just from a header.
+async fn chunked_oversize_server() -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut seen = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !seen.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match socket.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => seen.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                            Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+                if socket.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                let chunk = vec![b' '; 64 * 1024];
+                for _ in 0..32 {
+                    let size_line = format!("{:x}\r\n", chunk.len());
+                    if socket.write_all(size_line.as_bytes()).await.is_err()
+                        || socket.write_all(&chunk).await.is_err()
+                        || socket.write_all(b"\r\n").await.is_err()
+                    {
+                        return;
+                    }
+                }
+                let _ = socket.write_all(b"0\r\n\r\n").await;
+            });
+        }
+    });
+    (format!("http://{addr}"), task)
+}
+
+#[tokio::test]
+async fn a_chunked_body_without_a_length_is_cut_off_at_the_limit() {
+    let (base, _server) = chunked_oversize_server().await;
+    let Err(ReppoError::Parse(message)) = client(base).status("ev_1").await else {
+        panic!("expected Parse for an oversize chunked body");
+    };
+    assert!(message.contains("exceeds"), "{message}");
 }
 
 /// Hits the real Reppo Evaluation API through the whole worker path:

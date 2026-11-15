@@ -474,7 +474,11 @@ async fn process_job(
     loop {
         attempt += 1;
         match client.submit(&job.submission).await {
-            Ok(eval_id) => {
+            Ok(raw_eval_id) => {
+                // The id is Reppo's text. Statuses, logs and the stored
+                // score get a bounded, control-free copy; the original is
+                // only ever used to ask Reppo about this evaluation.
+                let eval_id = sanitize_untrusted(&raw_eval_id, MAX_UNTRUSTED_CHARS);
                 eprintln!(
                     "solv: reppo evaluation {eval_id} submitted for audit job {} (attempt {attempt})",
                     job.id
@@ -486,7 +490,7 @@ async fn process_job(
                         attempt,
                     },
                 );
-                match poll_until_resolved(client, &eval_id, config).await {
+                match poll_until_resolved(client, &raw_eval_id, config).await {
                     Polled::Settled(eval) => {
                         return Ok(SettledJob {
                             eval_id,
@@ -494,11 +498,13 @@ async fn process_job(
                         });
                     }
                     Polled::Failed(reason) if attempt <= config.max_reschedules => {
+                        let reason = sanitize_untrusted(&reason, MAX_UNTRUSTED_CHARS);
                         eprintln!(
                             "solv: reppo evaluation {eval_id} failed ({reason}); rescheduling"
                         );
                     }
                     Polled::Failed(reason) => {
+                        let reason = sanitize_untrusted(&reason, MAX_UNTRUSTED_CHARS);
                         return Err(format!(
                             "evaluation {eval_id} failed after {attempt} attempts: {reason}"
                         ));
@@ -611,6 +617,7 @@ async fn poll_until_resolved(
     eval_id: &str,
     config: &BureauConfig,
 ) -> Polled {
+    let shown = sanitize_untrusted(eval_id, MAX_UNTRUSTED_CHARS);
     let window = Duration::from_secs(u64::from(config.settlement_minutes) * 60);
     tokio::time::sleep(window).await;
     let deadline = Instant::now() + config.max_overdue;
@@ -633,12 +640,12 @@ async fn poll_until_resolved(
                         sanitize_untrusted(&reason, MAX_ERROR_CHARS)
                     ));
                 }
-                eprintln!("solv: reppo poll for {eval_id} returned an unreadable body; retrying");
+                eprintln!("solv: reppo poll for {shown} returned an unreadable body; retrying");
             }
             Err(error) if is_transient_poll(&error) => {
                 parse_failures = 0;
                 eprintln!(
-                    "solv: reppo poll for {eval_id} failed transiently ({})",
+                    "solv: reppo poll for {shown} failed transiently ({})",
                     describe(&error)
                 );
             }
