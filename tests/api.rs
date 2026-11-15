@@ -43,13 +43,20 @@ fn router_with_tier2(
     tier2: MockServClient,
     profiles: Vec<Profile>,
 ) -> (axum::Router, tempfile::TempDir) {
+    router_with_tier2_client(tier1, Arc::new(tier2), profiles)
+}
+
+fn router_with_tier2_client(
+    tier1: MockClefClient,
+    tier2: Arc<dyn ServClient>,
+    profiles: Vec<Profile>,
+) -> (axum::Router, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.json")).unwrap();
     for profile in profiles {
         store.upsert_profile(profile.counterparty_name.clone(), profile);
     }
     let tier1: Arc<dyn ClefClient> = Arc::new(tier1);
-    let tier2: Arc<dyn ServClient> = Arc::new(tier2);
     (build_router(AppState::new(store, tier1, tier2)), dir)
 }
 
@@ -414,5 +421,25 @@ async fn slow_tier2_is_cancelled_at_the_budget_ceiling() {
     assert!(
         elapsed < std::time::Duration::from_millis(2_100),
         "response took {elapsed:?}, budget exceeded"
+    );
+}
+
+/// A Tier 2 that never ran (no credentials) must not appear in `tier_used`,
+/// and must not report a latency — the receipt only claims what happened.
+#[tokio::test]
+async fn unconfigured_tier2_is_not_claimed_as_used() {
+    let (router, _dir) = router_with_tier2_client(
+        MockClefClient::with_injection(0.50),
+        Arc::new(solv::tier2::UnconfiguredServClient),
+        vec![prime_profile()],
+    );
+    let (_, body) = post(&router, 50.0, "Market data access.").await;
+    assert_eq!(body["decision"], "HOLD");
+    assert_eq!(body["reasons"][0]["code"], "SOLV-SYSTEM-003");
+    assert_eq!(body["tier_used"], json!(["clef-flash"]));
+    assert!(
+        body["latency_ms"]["tier2"].is_null(),
+        "{}",
+        body["latency_ms"]
     );
 }
