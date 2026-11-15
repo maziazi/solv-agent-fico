@@ -31,7 +31,7 @@ fn funded() -> BureauConfig {
 fn request(id: &str) -> AuditRequest {
     AuditRequest {
         counterparty_id: id.to_string(),
-        counterparty_name: format!("{id} Inc"),
+        counterparty_name: id.to_string(),
         target_url: format!("https://{id}.example.com"),
         claim: "Real-time market data, 1 month access.".to_string(),
     }
@@ -89,7 +89,7 @@ async fn a_settled_evaluation_creates_a_profile_with_the_mapped_score() {
     );
 
     let profile = store.profile("datafeed").expect("profile created");
-    assert_eq!(profile.counterparty_name, "datafeed Inc");
+    assert_eq!(profile.counterparty_name, "datafeed");
     assert_eq!(profile.target_url, "https://datafeed.example.com");
     let score = profile.score.expect("score set");
     assert_eq!(score.eval_id, "ev_mock_1");
@@ -114,13 +114,13 @@ async fn a_settled_evaluation_creates_a_profile_with_the_mapped_score() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_existing_profile_keeps_its_identity_and_gains_the_score() {
+async fn an_existing_profile_for_the_same_url_keeps_its_identity_and_gains_the_score() {
     let (_dir, store) = store();
     store.upsert_profile(
         "datafeed".to_string(),
         Profile {
-            counterparty_name: "DataFeed Pro".to_string(),
-            target_url: "https://api.datafeed.example/v1".to_string(),
+            counterparty_name: "datafeed".to_string(),
+            target_url: "https://datafeed.example.com".to_string(),
             score: None,
         },
     );
@@ -129,8 +129,8 @@ async fn an_existing_profile_keeps_its_identity_and_gains_the_score() {
     wait_terminal(&bureau, &enqueued.job_id).await;
 
     let profile = store.profile("datafeed").unwrap();
-    assert_eq!(profile.counterparty_name, "DataFeed Pro");
-    assert_eq!(profile.target_url, "https://api.datafeed.example/v1");
+    assert_eq!(profile.counterparty_name, "datafeed");
+    assert_eq!(profile.target_url, "https://datafeed.example.com");
     assert!(profile.score.is_some());
 }
 
@@ -207,7 +207,7 @@ async fn the_queue_never_holds_two_pending_evaluations_and_is_fifo() {
                 .to_string()
         })
         .collect();
-    assert_eq!(order, ["alpha Inc", "bravo Inc", "charlie Inc"], "FIFO");
+    assert_eq!(order, ["alpha", "bravo", "charlie"], "FIFO");
     assert_eq!(bureau.credits_remaining(), 700);
 }
 
@@ -942,4 +942,88 @@ async fn a_counterparty_can_be_audited_again_once_its_job_is_done() {
         JobStatus::Settled { .. }
     ));
     assert_eq!(bureau.credits_remaining(), 800);
+}
+
+#[tokio::test(start_paused = true)]
+async fn enqueue_refuses_an_id_that_differs_from_the_name() {
+    // The hot path reads profiles by counterparty_name while SPEC §7.2 names
+    // the audit field counterparty_id. Until the spec unifies the key, the
+    // two must be the same text or a score would land where nobody reads it.
+    let (_dir, store) = store();
+    let (bureau, _worker) = spawn(Arc::new(MockReppoClient::new(vec![], 0)), &store, funded());
+    let mut mismatched = request("acme");
+    mismatched.counterparty_name = "Acme Corp".to_string();
+    assert_eq!(
+        bureau.enqueue(mismatched),
+        Err(EnqueueError::IdNameMismatch)
+    );
+    assert_eq!(bureau.queued_len(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn enqueue_bounds_the_identifiers_it_will_store_and_send() {
+    let (_dir, store) = store();
+    let (bureau, _worker) = spawn(Arc::new(MockReppoClient::new(vec![], 0)), &store, funded());
+
+    let too_long = |field: &'static str, max: usize| EnqueueError::TooLong { field, max };
+
+    let mut long_id = request("x");
+    long_id.counterparty_id = "a".repeat(257);
+    long_id.counterparty_name = "a".repeat(257);
+    assert_eq!(
+        bureau.enqueue(long_id),
+        Err(too_long("counterparty_id", 256))
+    );
+
+    let mut long_name = request("x");
+    long_name.counterparty_name = "b".repeat(257);
+    assert_eq!(
+        bureau.enqueue(long_name),
+        Err(too_long("counterparty_name", 256)),
+        "length is judged before the id/name comparison"
+    );
+
+    let mut long_url = request("x");
+    long_url.target_url = format!("https://{}", "c".repeat(2_041));
+    assert_eq!(long_url.target_url.len(), 2_049);
+    assert_eq!(bureau.enqueue(long_url), Err(too_long("target_url", 2_048)));
+
+    // Exactly at the limits is accepted.
+    let mut at_limits = request("x");
+    at_limits.counterparty_id = "d".repeat(256);
+    at_limits.counterparty_name = "d".repeat(256);
+    at_limits.target_url = format!("https://{}", "e".repeat(2_040));
+    assert_eq!(at_limits.target_url.len(), 2_048);
+    assert!(bureau.enqueue(at_limits).is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_score_is_never_written_onto_a_profile_for_a_different_url() {
+    // The evaluation judged https://acme.example.com; the stored profile is
+    // for another site. Attaching the score would vouch for the wrong party.
+    let (_dir, store) = store();
+    let existing = Profile {
+        counterparty_name: "acme".to_string(),
+        target_url: "https://the-real-acme.example".to_string(),
+        score: None,
+    };
+    store.upsert_profile("acme".to_string(), existing.clone());
+    let (bureau, _worker) = spawn(Arc::new(MockReppoClient::new(vec![], 0)), &store, funded());
+    let enqueued = bureau.enqueue(request("acme")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(reason.contains("target_url mismatch"), "{reason}");
+    assert!(
+        reason.contains("ev_mock_1"),
+        "the evaluation id stays recoverable: {reason}"
+    );
+    assert_eq!(store.profile("acme"), Some(existing), "profile untouched");
+    assert_eq!(
+        bureau.credits_remaining(),
+        900,
+        "the evaluation settled, so Reppo charged for it anyway"
+    );
 }
