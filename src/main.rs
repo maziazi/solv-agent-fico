@@ -115,9 +115,37 @@ async fn main() {
         },
     }
 
+    // Public-deploy guards (SPEC §8.2). Invalid values stop the boot: a
+    // typo must never silently loosen a guard.
+    let limits = solv::guard::LimitsConfig::from_vars(
+        std::env::var("SOLV_RATE_LIMIT_PER_MIN").ok().as_deref(),
+        std::env::var("SOLV_MAX_CONCURRENT_CHECKS").ok().as_deref(),
+        std::env::var("SOLV_TRUST_PROXY").ok().as_deref(),
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("solv: {error}");
+        std::process::exit(1);
+    });
+    let admin_token = std::env::var("SOLV_ADMIN_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
+    if let Some(token) = &admin_token {
+        if token.chars().count() < solv::guard::MIN_ADMIN_TOKEN_CHARS {
+            eprintln!(
+                "solv: SOLV_ADMIN_TOKEN must be at least {} characters",
+                solv::guard::MIN_ADMIN_TOKEN_CHARS
+            );
+            std::process::exit(1);
+        }
+    } else {
+        println!("solv: SOLV_ADMIN_TOKEN not set; audit-counterparty is closed (401)");
+    }
+
     let state = AppState::new(store, tier1, tier2)
         .with_bureau(bureau)
-        .with_policy_config(policy_config);
+        .with_policy_config(policy_config)
+        .with_limits(limits)
+        .with_admin_token(admin_token.as_deref());
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await

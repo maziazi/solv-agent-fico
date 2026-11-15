@@ -980,13 +980,30 @@ shell under the same CSP; the client router resolves the path. Details in
 | --- | --- | --- |
 | Prompt injection in `service_description` | Prompt-position isolation + `serv_prompt_guard` + the Tier 1 `noul` question | G3 |
 | Indirect injection from target page content | Page content is fetched only on the batch audit path, and still treated as data | G3 |
-| An attacker burning the Reppo quota | `audit-counterparty` is rate-limited per API key; remaining credits are exposed on `/directory` | — |
+| An attacker burning the Reppo quota | `audit-counterparty` requires `Authorization: Bearer $SOLV_ADMIN_TOKEN` (constant-time compare, closed with 401 when no token is set, no detail on which part failed); the credit budget defaults to 0; remaining credits are exposed on `/directory` | — |
+| An attacker burning the Cloudflare and SERV quota through the public gate | `pre-spend-check` is rate limited per client (default 20 requests per minute) and capped in concurrency (default 8 in flight); refusals are `429` with `Retry-After` | — |
 | Denial of service via a giant description | Request size limits; descriptions over 1,500 characters escalate, over 50 KB are rejected | G2 |
 | All AI providers down, so every transaction passes | Fail-closed: the result is `HOLD` | G1 |
 | An old receipt replayed as an approval | The receipt carries `amount_usd` and an evidence hash (both sealed), and a receipt is not an authorisation token — nothing in Solv accepts one as proof of approval. Its `created_at` is **not** covered by the hash (§6.3), so the hash alone does not prove how old a receipt is | G4 |
 | Learned rules poisoned via manipulated critique | Rules are born `shadow`, promotion is manual, the source quote is stored | — |
 | XSS from a counterparty quote on the public receipt page | `quote` is escaped, never rendered as HTML/Markdown, strict CSP | — |
 | A forged score being injected | There is no score-writing endpoint (§3.2) | — |
+
+Settings for the two guards, read once at boot (an invalid value stops the
+boot rather than loosening a guard):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SOLV_RATE_LIMIT_PER_MIN` | `20` | Requests one client may make to `pre-spend-check` in any 60-second window (1 to 10,000). |
+| `SOLV_MAX_CONCURRENT_CHECKS` | `8` | Checks in flight at once across all clients (1 to 1,000). |
+| `SOLV_TRUST_PROXY` | `0` | `1` reads the client address from the **rightmost** `X-Forwarded-For` entry. Use only behind exactly one proxy that appends the address it saw; otherwise the header is attacker-controlled. |
+| `SOLV_ADMIN_TOKEN` | unset | Bearer token for `audit-counterparty`, at least 16 characters. Unset means the endpoint always answers `401`. |
+
+Limits that remain: the limiter is per process and in memory, so it resets on
+restart and is not shared between instances; one IPv6 /64 counts as one client;
+and the tracking table is capped at 10,000 clients, after which unknown clients
+are refused until older windows lapse. `/healthz`, `/api/v1/directory`,
+receipts and the pages are not limited.
 
 ### 8.3 Attack Lab
 
