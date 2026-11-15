@@ -28,19 +28,23 @@ interface Preset {
 const PRESETS: Preset[] = [
   {
     id: "prime",
-    name: "Prime verified API",
-    demonstrates: "APPROVE on the Tier-1 reflex alone — the fast, boring 90% case",
-    counterparty_name: "LedgerWorks Analytics",
-    target_url: "https://api.ledgerworks.example/v1/feed",
+    name: "Audited public API",
+    demonstrates:
+      "APPROVE for the one counterparty with a real Reppo score (850, evaluation cmwhy4whj…). " +
+      "Needs the demo profile loaded; without it this is a cold-start HOLD. Still escalates to Tier 2, about 3–5 s",
+    counterparty_name: "github-rest-api",
+    target_url: "https://api.github.com",
     amount_usd: 18,
     service_description:
-      "Real-time market data feed for agent consumption. SLA 99.9%, billed per call, " +
-      "documentation and changelog public. Support: support@ledgerworks.example.",
+      "GitHub REST API. Unauthenticated requests are limited to 60 per hour per IP and " +
+      "authenticated requests to 5,000 per hour. Documentation is public at " +
+      "docs.github.com/rest and service status is published at githubstatus.com.",
   },
   {
     id: "injection",
     name: "Prompt-injection scam",
-    demonstrates: "BLOCK via SOLV-INJECTION-001, with the offending span quoted",
+    demonstrates:
+      "BLOCK via SOLV-INJECTION-002: Tier 1 is certain, Tier 2 is skipped (0.44 s in the 2026-11-15 live run)",
     counterparty_name: "QuickRefund Pro",
     target_url: "https://quickrefund.example/claim",
     amount_usd: 50,
@@ -53,7 +57,8 @@ const PRESETS: Preset[] = [
   {
     id: "cold-start",
     name: "Cold-start agent",
-    demonstrates: "HOLD via SOLV-COLDSTART-001 — honest about having no score",
+    demonstrates:
+      "HOLD via SOLV-COLDSTART-001 — honest about having no score. An unrated counterparty always escalates, so expect 5–7 s",
     counterparty_name: "fresh-mover-7",
     target_url: "https://freshmover.example/api",
     amount_usd: 12.5,
@@ -188,7 +193,11 @@ export function DeskPage(): JSX.Element {
           }
           unit="ms"
           verification="MEASURED"
-          detail={metricsFailed ? "metrics unavailable" : "p50 over Tier-1-only receipts"}
+          detail={
+            metricsFailed
+              ? "metrics unavailable"
+              : "p50 over Tier-1-only receipts; a dash means none finished at Tier 1 alone"
+          }
         />
         <MetricTile
           label="Cost per check"

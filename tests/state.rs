@@ -4,7 +4,8 @@
 
 use std::time::Duration;
 
-use solv::state::{LearnedRule, Profile, Receipt, RuleStatus, Store, StoreError};
+use solv::score::effective_score;
+use solv::state::{LearnedRule, Profile, Receipt, RuleStatus, SeedOutcome, Store, StoreError};
 
 fn sample_profile(name: &str) -> Profile {
     Profile {
@@ -315,4 +316,147 @@ async fn worker_survives_a_failing_write_and_keeps_serving() {
     assert_eq!(store.profile("cp-1"), Some(sample_profile("DataFeed Pro")));
     store.upsert_profile("cp-2".to_string(), sample_profile("Translate Bot"));
     assert_eq!(store.profile("cp-2"), Some(sample_profile("Translate Bot")));
+}
+
+// ---------------------------------------------------------------------------
+// Demo seed (SPEC §5.6): opt-in, only into an empty store, validated whole.
+// ---------------------------------------------------------------------------
+
+fn seed_json(profile: serde_json::Value) -> String {
+    serde_json::json!({
+        "schema_version": 1,
+        "counterparties": { "seeded-api": profile }
+    })
+    .to_string()
+}
+
+fn good_seed_profile() -> serde_json::Value {
+    serde_json::json!({
+        "counterparty_name": "seeded-api",
+        "target_url": "https://seeded.example.com",
+        "score": {
+            "reppo_score": 90.0,
+            "eval_id": "ev_seed_1",
+            "settled_at_unix": 1_794_754_061u64,
+            "pillars": {
+                "reliability": 5, "track_record": 9, "safety": 5, "maturity": 5
+            }
+        }
+    })
+}
+
+fn write_seed(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let path = dir.join("seed.json");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn a_seed_loads_into_an_empty_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("solv_state.json")).unwrap();
+    let seed = write_seed(dir.path(), &seed_json(good_seed_profile()));
+
+    assert_eq!(store.seed_from_file(&seed).unwrap(), SeedOutcome::Loaded(1));
+    let profile = store.profile("seeded-api").expect("seeded profile");
+    let score = profile.score.expect("score kept");
+    assert_eq!(score.eval_id, "ev_seed_1");
+    assert_eq!(score.reppo_score, 90.0);
+}
+
+#[test]
+fn a_seed_never_overwrites_existing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("solv_state.json")).unwrap();
+    store.upsert_profile("cp-1".to_string(), sample_profile("cp-1"));
+    let seed = write_seed(dir.path(), &seed_json(good_seed_profile()));
+
+    assert_eq!(store.seed_from_file(&seed).unwrap(), SeedOutcome::Skipped);
+    assert!(
+        store.profile("seeded-api").is_none(),
+        "seed was not applied"
+    );
+    assert_eq!(store.list_profiles().len(), 1);
+    assert_eq!(store.profile("cp-1").unwrap(), sample_profile("cp-1"));
+}
+
+#[test]
+fn a_skipped_seed_is_not_even_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("solv_state.json")).unwrap();
+    store.upsert_profile("cp-1".to_string(), sample_profile("cp-1"));
+    let missing = dir.path().join("does-not-exist.json");
+    assert_eq!(
+        store.seed_from_file(&missing).unwrap(),
+        SeedOutcome::Skipped
+    );
+}
+
+#[test]
+fn a_bad_seed_fails_loudly_and_leaves_the_store_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut no_eval = good_seed_profile();
+    no_eval["score"]["eval_id"] = serde_json::json!("  ");
+    let mut out_of_range = good_seed_profile();
+    out_of_range["score"]["reppo_score"] = serde_json::json!(101.0);
+    let mut name_mismatch = good_seed_profile();
+    name_mismatch["counterparty_name"] = serde_json::json!("someone-else");
+    let mut no_url = good_seed_profile();
+    no_url["target_url"] = serde_json::json!("");
+
+    let bad_bodies = [
+        "not json at all".to_string(),
+        String::new(),
+        r#"{"schema_version":2,"counterparties":{"a":{"counterparty_name":"a","target_url":"https://a.example"}}}"#
+            .to_string(),
+        r#"{"schema_version":1,"counterparties":{}}"#.to_string(),
+        r#"{"schema_version":1,"counterparties":{},"receipts":{}}"#.to_string(),
+        seed_json(no_eval),
+        seed_json(out_of_range),
+        seed_json(name_mismatch),
+        seed_json(no_url),
+    ];
+    for body in &bad_bodies {
+        let store = Store::open(dir.path().join("solv_state.json")).unwrap();
+        let seed = write_seed(dir.path(), body);
+        match store.seed_from_file(&seed) {
+            Err(StoreError::Seed(_)) => {}
+            other => panic!("expected StoreError::Seed for {body:?}, got {other:?}"),
+        }
+        assert!(store.list_profiles().is_empty(), "nothing partially loaded");
+        // The store is still usable: no poisoned lock, no panic.
+        store.upsert_profile("cp-1".to_string(), sample_profile("cp-1"));
+        assert_eq!(store.list_profiles().len(), 1);
+    }
+
+    let store = Store::open(dir.path().join("solv_state.json")).unwrap();
+    match store.seed_from_file(&dir.path().join("missing.json")) {
+        Err(StoreError::Seed(message)) => assert!(message.contains("cannot read")),
+        other => panic!("expected StoreError::Seed, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_committed_demo_seed_is_one_real_evaluation_that_ages_and_expires() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("solv_state.json")).unwrap();
+    let seed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("seed/demo_profiles.json");
+
+    assert_eq!(store.seed_from_file(&seed).unwrap(), SeedOutcome::Loaded(1));
+    let profile = store.profile("github-rest-api").expect("demo profile");
+    assert_eq!(profile.target_url, "https://api.github.com");
+    let score = profile.score.expect("demo score");
+    assert_eq!(score.eval_id, "cmwhy4whj000707jptcchz6fz");
+    assert_eq!(score.reppo_score, 100.0);
+
+    // Same pipeline as any score: aged from settled_at at read time.
+    let fresh = effective_score(&score, score.settled_at_unix).unwrap();
+    assert_eq!((fresh.fico_raw, fresh.fico_effective), (850, 850));
+    let day = 86_400;
+    let aged = effective_score(&score, score.settled_at_unix + 60 * day).unwrap();
+    assert!(aged.fico_effective < 850, "decays after 30 days");
+    assert!(
+        effective_score(&score, score.settled_at_unix + 91 * day).is_none(),
+        "discarded after 90 days: the seed stops rating around 2027-02-13"
+    );
 }

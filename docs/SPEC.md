@@ -684,6 +684,19 @@ from, so it can be contested.
   `service_description` text from untrusted parties.
 - No external database. This decision protects §2.1 — state reads at ≤ 1 ms p95
   — and keeps deployment to a single binary.
+- **Demo seed (opt-in):** when `SOLV_SEED_FILE` names a file and the store has
+  no profiles, the profiles in it are loaded; existing state is never
+  overwritten, and a bad file stops startup instead of failing mid-request.
+  The committed `seed/demo_profiles.json` holds one profile
+  (`github-rest-api`) built from one real settled evaluation
+  (`cmwhy4whj000707jptcchz6fz`, score 100, confidence high, 2026-11-15). It
+  is not a state snapshot: no receipts, no rules, and no counterparty-supplied
+  text beyond a name and a URL. A seeded score goes through the same decay as
+  any other (§4.2): it starts to decay after 30 days (2026-12-15) and is
+  discarded after 90 days (about 2027-02-13), at which point the profile is
+  UNRATED again. To refresh it, run a real audit (440 Reppo credits, owner
+  approval required), then copy that evaluation's `eval_id`, `reppo_score`,
+  `settled_at_unix` and pillars into the file.
 
 Accepted limits: state does not survive beyond one node, there is no
 replication, and its size is bounded by RAM. For the current scope this is
