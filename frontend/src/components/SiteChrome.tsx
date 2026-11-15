@@ -49,6 +49,7 @@ const NAV: NavItem[] = [
     ],
   },
   { label: "How it works", to: "/how-it-works" },
+  { label: "See it work", to: "/proof" },
   { label: "Explorer", to: "/explorer" },
   { label: "Docs", to: "/docs" },
   { label: "Pricing", to: "/pricing" },
@@ -233,6 +234,7 @@ export function SiteHeader(): JSX.Element {
 
 const FOOTER_LINKS: { label: string; to: string }[] = [
   { label: "How it works", to: "/how-it-works" },
+  { label: "See it work", to: "/proof" },
   { label: "Explorer", to: "/explorer" },
   { label: "API docs", to: "/docs" },
   { label: "Pricing", to: "/pricing" },

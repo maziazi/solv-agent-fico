@@ -12,6 +12,7 @@ import { SiteFooter, SiteHeader } from "./components/SiteChrome";
 import { DeskPage } from "./pages/DeskPage";
 import { ExplorerPage } from "./pages/ExplorerPage";
 import { LandingPage } from "./pages/LandingPage";
+import { ProofPage } from "./pages/ProofPage";
 import {
   AttackLabPage,
   DocsPage,
@@ -27,6 +28,7 @@ export function App(): JSX.Element {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/desk" element={<DeskPage />} />
+          <Route path="/proof" element={<ProofPage />} />
           <Route path="/explorer" element={<ExplorerPage />} />
           <Route path="/how-it-works" element={<HowItWorksPage />} />
           <Route path="/docs" element={<DocsPage />} />

@@ -26,7 +26,7 @@ function Unrated({ what }: { what: string }): JSX.Element {
   return (
     <div className="border border-dashed border-border bg-bg p-4 text-sm">
       <p className="font-medium">
-        <span className="font-mono">UNRATED</span> — no evidence on file for “{what}”.
+        <span className="font-mono">UNRATED</span>: no evidence on file for “{what}”.
       </p>
       <p className="mt-1 text-muted">
         That is an absence of evidence, not bad evidence. Solv holds no score
