@@ -51,6 +51,10 @@ pub struct RuleSourceEntry {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LearnedRuleEntry {
     pub rule_id: String,
+    /// The fixed question this rule contributes to the Clef call — the
+    /// catalogue wording (DESIGN §4.3 "the rule question"), never model
+    /// text. `None` for an identity-only rule that cannot compile.
+    pub question: Option<String>,
     /// `shadow` until an operator promotes it (SPEC §5.5); the UI must keep
     /// the label visible so a shadow rule never reads as enforcing.
     pub status: String,
@@ -106,6 +110,13 @@ pub fn build(
 
 /// The latest receipt naming this counterparty in its evidence, or `None`.
 /// Receipt ids are time-ordered, so the id order is the recency order.
+///
+/// Convention this join rests on: the desk writes the caller-supplied
+/// `counterparty_name` into `evidence.request.counterparty_id`, and the
+/// bureau keys profiles by the same id — the join holds exactly while a
+/// desk caller passes the bureau id as the name, which is the same
+/// convention the desk's own profile lookup uses. If the desk request ever
+/// grows a separate `counterparty_id`, this must follow it.
 fn last_decision(id: &str, receipts: &[(ReceiptId, Receipt)]) -> Option<LastDecision> {
     receipts
         .iter()
@@ -158,6 +169,9 @@ fn rule_entry(rule: &LearnedRule) -> LearnedRuleEntry {
         }
         .to_string(),
         topic: rule.topic,
+        question: rule
+            .topic
+            .map(|topic| topic.spec().instructions.to_string()),
         effect: rule.effect,
         threshold: rule.threshold,
         created_from: rule.created_from.as_ref().map(source_entry),
@@ -268,6 +282,11 @@ mod tests {
         let as_json = serde_json::to_value(entry).unwrap();
         assert_eq!(as_json["topic"], "guaranteed_refund");
         assert_eq!(as_json["effect"], "forced_hold");
+        // The question is the catalogue wording, not model text (SPEC §5.5).
+        assert_eq!(
+            as_json["question"],
+            "Does the description promise a guaranteed refund or insurance if the deliverable fails?"
+        );
         let source = entry.created_from.as_ref().expect("source kept");
         assert_eq!(source.eval_id, "ev_9");
         assert_eq!(

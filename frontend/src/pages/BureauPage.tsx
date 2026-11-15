@@ -21,12 +21,15 @@ function sortEntries(
 ): CounterpartyEntry[] {
   const sorted = [...entries];
   // Nulls sort last in both orders: an UNRATED counterparty never jumps to
-  // the top by pretending to have the smallest (or largest) score.
+  // the top by pretending to have the smallest (or largest) score. Ties
+  // return 0 so the store's id order survives the sort.
+  const value = (entry: CounterpartyEntry) =>
+    key === "score" ? (entry.fico_effective ?? -1) : (entry.score_age_days ?? -1);
   sorted.sort((a, b) => {
-    if (key === "score") {
-      return (a.fico_effective ?? -1) < (b.fico_effective ?? -1) ? 1 : -1;
-    }
-    return (a.score_age_days ?? -1) < (b.score_age_days ?? -1) ? 1 : -1;
+    const av = value(a);
+    const bv = value(b);
+    if (av === bv) return 0;
+    return av < bv ? 1 : -1;
   });
   return sorted;
 }
@@ -47,7 +50,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
             type="button"
             onClick={() => setSortKey("score")}
             aria-pressed={sortKey === "score"}
-            className={`font-mono underline decoration-1 underline-offset-2 ${
+            className={`font-mono underline decoration-1 underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
               sortKey === "score" ? "text-ink" : "text-muted"
             }`}
           >
@@ -58,7 +61,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
             type="button"
             onClick={() => setSortKey("age")}
             aria-pressed={sortKey === "age"}
-            className={`font-mono underline decoration-1 underline-offset-2 ${
+            className={`font-mono underline decoration-1 underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
               sortKey === "age" ? "text-ink" : "text-muted"
             }`}
           >
@@ -90,7 +93,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
                 <th scope="col" aria-sort={sortKey === "score" ? "descending" : "none"} className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
                   FICO (effective)
                 </th>
-                <th scope="col" aria-sort={sortKey === "age" ? "descending" : "none"} className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
+                <th scope="col" aria-sort={sortKey === "age" ? "ascending" : "none"} className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
                   Evidence age
                 </th>
                 <th scope="col" className="border-b border-border pb-2 text-left text-sm font-medium text-muted">
@@ -124,7 +127,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
                         <span className="font-mono text-sm">{usd(entry.last_decision.amount_usd)}</span>
                         <a
                           href={entry.last_decision.receipt_url}
-                          className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2"
+                          className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
                         >
                           receipt ↗
                         </a>
@@ -180,6 +183,9 @@ function Guardrails({ rules }: { rules: LearnedRuleEntry[] }): JSX.Element {
                   </span>
                 )}
               </div>
+              {rule.question && (
+                <p className="mt-1 text-[15px] leading-snug">{rule.question}</p>
+              )}
               {rule.created_from && (
                 <div className="mt-2 border border-dashed border-border bg-bg p-3">
                   <p className="font-mono text-xs text-muted">

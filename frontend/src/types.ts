@@ -59,6 +59,9 @@ export interface PreSpendCheckResponse {
 }
 
 export interface LastDecision {
+  // Narrower than the wire format (Receipt.decision is a free string):
+  // true for every receipt this system writes; a tampered snapshot would
+  // render an uncoloured badge — degraded, not dangerous (SPEC §8.1).
   decision: "APPROVE" | "HOLD" | "BLOCK";
   receipt_id: string;
   receipt_url: string;
@@ -85,6 +88,9 @@ export interface RuleSource {
 
 export interface LearnedRuleEntry {
   rule_id: string;
+  // The question this rule contributes to the Clef call — present only when
+  // the rule has a topic (identity-only legacy rules have none).
+  question: string | null;
   // "shadow" until an operator promotes it — the UI must keep that visible.
   status: "shadow" | "active";
   topic: string | null;
