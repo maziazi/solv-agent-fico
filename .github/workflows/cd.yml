@@ -1,7 +1,12 @@
-# Solv CD (docs/WORKFLOW.md §4.3): deploys run from a tag, never from a
-# merge; the production environment forces a human approval first; provider
-# credentials travel only from Actions Secrets to platform secrets and are
-# never written to the repository or the image.
+# Solv CD: deploys run from a tag, never from a merge, and the production
+# environment forces a human approval first. Provider credentials travel
+# only from Actions Secrets into the running service's environment (Render
+# reads them from its own dashboard config) and never touch the repository.
+#
+# Host: Render free web service, Docker runtime, built from the committed
+# Dockerfile (docs/WORKFLOW.md §4.3, changed 2026-11-15: fly.io was
+# replaced at the owner's direction — the account was flagged high-risk at
+# creation and could not host an app).
 name: cd
 
 on:
@@ -20,26 +25,15 @@ jobs:
     environment: production        # requires a reviewer to approve
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Push provider secrets from Actions Secrets
+      - name: Trigger the Render deploy hook
         run: |
-          flyctl secrets set --stage --app "$FLY_APP_NAME" \
-            CLOUDFLARE_ACCOUNT_ID="${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" \
-            CLOUDFLARE_API_TOKEN="${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-            SERV_API_KEY="${{ secrets.SERV_API_KEY }}" \
-            REPPO_API_KEY="${{ secrets.REPPO_API_KEY }}"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
-      - name: Deploy
-        run: flyctl deploy --remote-only --app "$FLY_APP_NAME"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
+          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache": "do_not_clear"}'
       - name: Verify the deployment answers
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS "https://${{ vars.FLY_APP_HOST }}/healthz"; then exit 0; fi
-            sleep 5
+            if curl -fsS "https://${{ vars.RENDER_SERVICE_HOST }}/healthz"; then exit 0; fi
+            sleep 10
           done
           exit 1
