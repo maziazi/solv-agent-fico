@@ -1,6 +1,7 @@
 # Fly.io app definition for the one deployable artefact (docs/WORKFLOW.md
-# §4.3). The app name here is a placeholder; the deploy pins the real one
-# via the flyctl CLI configuration, and credentials never live in this file.
+# §4.3). The deploy pins the real app name from the FLY_APP_NAME Actions
+# Variable (--app on both flyctl steps), so the placeholder here never
+# receives a deploy, and credentials never live in this file.
 app = "solv"
 primary_region = "sin"
 

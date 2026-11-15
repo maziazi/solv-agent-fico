@@ -298,8 +298,9 @@ verifies `/healthz` answers before declaring success. Deploys trigger on tags
 only — merging to `main` is never an accidental release.
 
 Required Actions Secrets: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
-`SERV_API_KEY`, `REPPO_API_KEY`, `FLY_API_TOKEN`. Required Actions Variable:
-`FLY_APP_HOST`.
+`SERV_API_KEY`, `REPPO_API_KEY`, `FLY_API_TOKEN`. Required Actions Variables:
+`FLY_APP_NAME` (the fly app both flyctl steps pin) and `FLY_APP_HOST` (the
+hostname the post-deploy `/healthz` probe checks).
 
 ## Contributing
 
