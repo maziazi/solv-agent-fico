@@ -42,6 +42,7 @@ fn bench_state() -> AppState {
         verdict: Some(ServVerdict::Approve),
         fail_with_status: None,
         delay: None,
+        started: None,
     });
     AppState::new(store, tier1, tier2)
 }

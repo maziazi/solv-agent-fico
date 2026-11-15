@@ -19,12 +19,14 @@ use solv::state::Store;
 use solv::tier1::{ClefClient, MockClefClient};
 use solv::tier2::{MockServClient, ServClient};
 use solv::{AppState, build_router};
+use tokio::sync::Semaphore;
 use tower::ServiceExt;
 
 const ADMIN_TOKEN: &str = "integration-admin-token-4242";
 
 struct Harness {
     router: axum::Router,
+    tier2_started: Arc<Semaphore>,
     _dir: tempfile::TempDir,
 }
 
@@ -36,10 +38,12 @@ fn harness(
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.json")).unwrap();
     let tier1: Arc<dyn ClefClient> = Arc::new(MockClefClient::with_injection(0.02));
+    let tier2_started = Arc::new(Semaphore::new(0));
     // An UNRATED counterparty always escalates, so the delay holds the
     // request (and its concurrency permit) open.
     let tier2: Arc<dyn ServClient> = Arc::new(MockServClient {
         delay: tier2_delay,
+        started: Some(Arc::clone(&tier2_started)),
         ..MockServClient::default()
     });
     let mut state = AppState::new(store, tier1, tier2).with_admin_token(admin);
@@ -48,6 +52,7 @@ fn harness(
     }
     Harness {
         router: build_router(state),
+        tier2_started,
         _dir: dir,
     }
 }
@@ -75,6 +80,7 @@ fn with_worker(credits: u32, admin: Option<&str>) -> Harness {
         .with_admin_token(admin);
     Harness {
         router: build_router(state),
+        tier2_started: Arc::new(Semaphore::new(0)),
         _dir: dir,
     }
 }
@@ -84,6 +90,14 @@ fn peer(ip: &str) -> SocketAddr {
 }
 
 fn check_request(from: SocketAddr, forwarded: Option<&str>) -> Request<Body> {
+    check_request_with_description(from, forwarded, "A plain description of a plain service.")
+}
+
+fn check_request_with_description(
+    from: SocketAddr,
+    forwarded: Option<&str>,
+    service_description: &str,
+) -> Request<Body> {
     let mut builder = Request::builder()
         .method("POST")
         .uri("/api/v1/pre-spend-check")
@@ -97,7 +111,7 @@ fn check_request(from: SocketAddr, forwarded: Option<&str>) -> Request<Body> {
                 "counterparty_name": "nobody-yet",
                 "target_url": "https://nobody.example/api",
                 "amount_usd": 5,
-                "service_description": "A plain description of a plain service."
+                "service_description": service_description
             })
             .to_string(),
         ))
@@ -337,11 +351,18 @@ async fn the_concurrency_cap_serves_n_and_refuses_the_rest_then_recovers() {
             let router = h.router.clone();
             // Distinct clients, so only the global cap can refuse.
             let from = peer(&format!("203.0.113.{}", 60 + n));
-            tokio::spawn(async move { send(&router, check_request(from, None)).await })
+            tokio::spawn(async move {
+                send(
+                    &router,
+                    check_request_with_description(from, None, &"x".repeat(1_501)),
+                )
+                .await
+            })
         })
         .collect();
     let mut served = 0;
     let mut refused = 0;
+    h.tier2_started.acquire_many(2).await.unwrap().forget();
     for task in tasks {
         let (status, headers, body) = task.await.unwrap();
         match status {
@@ -375,9 +396,15 @@ async fn a_load_refusal_does_not_spend_the_clients_own_allowance() {
     );
     let busy = {
         let router = h.router.clone();
-        tokio::spawn(async move { send(&router, check_request(peer("203.0.113.80"), None)).await })
+        tokio::spawn(async move {
+            send(
+                &router,
+                check_request_with_description(peer("203.0.113.80"), None, &"x".repeat(1_501)),
+            )
+            .await
+        })
     };
-    tokio::task::yield_now().await;
+    h.tier2_started.acquire().await.unwrap().forget();
     // The cap is full, so this one is refused for load...
     let victim = peer("203.0.113.81");
     let (status, _, _) = send(&h.router, check_request(victim, None)).await;

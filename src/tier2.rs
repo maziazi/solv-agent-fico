@@ -7,10 +7,12 @@
 //! evidence of injection, not a failed call — the two map to different
 //! policy rows.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use crate::policy::Tier2Outcome;
 
@@ -281,11 +283,15 @@ pub struct MockServClient {
     pub verdict: Option<ServVerdict>,
     pub fail_with_status: Option<u16>,
     pub delay: Option<Duration>,
+    pub started: Option<Arc<Semaphore>>,
 }
 
 #[async_trait]
 impl ServClient for MockServClient {
     async fn reason(&self, _ask: &ServAsk) -> Result<ServVerdict, ServError> {
+        if let Some(started) = &self.started {
+            started.add_permits(1);
+        }
         if let Some(delay) = self.delay {
             tokio::time::sleep(delay).await;
         }
