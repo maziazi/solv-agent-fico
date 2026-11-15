@@ -1,0 +1,16 @@
+# Everything that must never reach a build context or an image (AGENTS.md:
+# keys live only in a gitignored .env and in Actions Secrets), plus the
+# directories the build does not need.
+.env
+.env.*
+solv_state.json
+solv_state.json.tmp
+*.state.json
+.git
+.claude
+target
+frontend/node_modules
+docs
+tests
+.github
+ci_state.json
