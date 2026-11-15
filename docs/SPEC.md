@@ -78,10 +78,19 @@ Two technical consequences none of the comparables have:
    is non-autoregressive: one forward pass, typed outputs
    (`noul`/`choice`/`score`) with probabilities. No tokens are invented one at a
    time, so there is no answer-length variance to make latency unpredictable.
-2. **Learned rules compile into `noul` questions in the reflex layer** (§5.5).
-   Reppo's written critiques do not end up as notes on a dashboard; they become
-   questions answered inside the same forward pass. The feedback loop closes
-   **on the hot path**, not in a monthly report.
+2. **Reppo critiques select learned rules that compile into `noul` questions
+   in the reflex layer** (§5.5). A critique never becomes question text: it
+   *selects* one operator-promotable question from a fixed catalogue, and
+   model-based distillation is not built. Once an operator promotes a rule, its
+   question is answered inside the same forward pass, so the loop closes **on
+   the hot path** after a manual promotion — not automatically, and not in a
+   monthly report. Three of the six catalogue topics (urgency pressure,
+   credential request, unverifiable claim) overlap the standard `risk_class`
+   question (coercion, exfiltration, overclaim), so a rule on those adds a
+   second, narrower reading of a risk Tier 1 already scores; the other three
+   (guaranteed refund, off-platform payment, impersonated authority) add
+   coverage the standard questions lack. Whether either kind catches anything
+   real is **UNPROVEN** (§11).
 
 What Solv does **not** claim: not the most accurate, not the richest on-chain
 data, not the largest evaluator pool.
@@ -576,8 +585,18 @@ so it never becomes question text. Instead:
 - A fixed catalogue of topics (`src/rules.rs`: guaranteed refund, urgency
   pressure, credential request, off-platform payment, unverifiable claim,
   impersonated authority) holds the question wording, written by Solv. A
-  critique with `score ≤ 4` only *selects* a topic, by keyword count; one that
-  matches none produces no rule. The model never sees the critique.
+  critique with `score ≤ 4` only *selects* a topic; the model never sees the
+  critique. Selection reads whole words (a keyword may carry a suffix:
+  "refunds" matches "refund"; "crushing" does not match "rush"), picks the
+  topic with the most distinct keywords, and **creates no rule on a tie** or on
+  no match (a tie is counted and logged, without the critique). A keyword is
+  ignored when a negator ("no", "not", "never", "without", "cannot", "non",
+  "n't") sits within two words before it, or when "free" follows it ("no
+  refund", "login-free"). The window is two words, so "never offers a refund"
+  is **not** caught and would select the refund topic; a wider window is a
+  one-constant change. Control and invisible characters (zero-width,
+  bidirectional, soft hyphen, variation selectors, the Unicode tag block) are
+  dropped before selection, so a keyword cannot be hidden by splitting it.
 - One rule per topic. A second critique on a topic that already has a rule, in
   any status, is dropped. A rule is born `shadow` with effect `forced_hold` and
   threshold 0.85; an automatically born rule is never `forced_block`.
@@ -594,6 +613,23 @@ so it never becomes question text. Instead:
   hot-path counters, and the shipped selection is by id.
 - The compiled set is rebuilt when rules change and handed to the hot path as
   an `Arc`; a request pays a lock read and a clone, not a recompilation.
+- A fired rule's reason carries `detector_output` `{ rule_id, topic, question,
+  probability_true, threshold }`: which rule, the catalogue question Solv asked,
+  Clef's answer, and the threshold it met. Never the critique.
+- A snapshot may name a topic this build does not know (written by a newer
+  build, or edited by hand). The store opens anyway; that rule keeps its place
+  but has no topic and is never compiled. The unknown name is not preserved
+  across the next snapshot.
+
+**What shadow means today.** `shadow` rules are stored and shown to the
+operator; they are **never evaluated**. SPEC §5.5 describes a nightly batch
+that evaluates them; it is not built, because evaluating a shadow rule means
+adding its question to a call and that spends tokens, which is the owner's
+decision. Consequences, stated plainly: a shadow rule has no hit-rate and no
+false-hold counter, so promotion by hand is made without data; the 0.85
+threshold is a default, not a calibrated value (**UNPROVEN**); and a promoted
+`forced_hold` rule that fires on ordinary traffic holds that traffic until an
+operator demotes it. Treat promotion as a change that needs watching.
 
 A model-assisted distiller, which could cover critiques the catalogue misses,
 is a later step and would need the same containment: its output is also text
@@ -767,15 +803,24 @@ produce. Notes on the shape:
   `absolute_cap_usd`, `latency_ceiling_ms`.
 - `ruleset_version` is `1` plus the number of changes to the set of active
   learned rules since the store was created. Promoting or demoting a rule
-  moves it; adding a `shadow` rule does not, because nothing in force changed.
-  The count is persisted in the snapshot. (The `14` in the §5.5 learned-rule
+  moves it, and so does replacing the whole rule set; adding a `shadow` rule
+  does not, and neither does promoting a rule that cannot compile (no topic, a
+  threshold outside `(0, 1]`, or beyond the first 8), because nothing in force
+  changed. Two stated limits. The count is persisted by the asynchronous
+  snapshot (§5.6), so after a crash inside the 2-second window the same number
+  can later name a different set. And `ruleset_version` is the constant
+  `RULESET_VERSION` plus the count, so raising the constant in a later release
+  can make a new version equal an old one. (The `14` in the §5.5 learned-rule
   example is illustrative.)
 - `rules_applied` lists the ids (`SOLV-RULE-014`) of the active learned rules
   whose question the Tier 1 response answered, in ascending id order. A
   `shadow` rule never appears, and the list is empty when Tier 1 returned
   nothing. The rule's own answer is in `tier1.answers.rule_<n>`, so it is
   sealed with the rest. A rule that fired also appears in `reasons[]` as
-  `SOLV-RULE-<n>`.
+  `SOLV-RULE-<n>`. `rules_applied` records rules that **answered**, not rules
+  that were **active**: a rule that was active but whose answer was missing or
+  unreadable, or that fell outside the first 8, is not listed, and the receipt
+  does not say it was skipped.
 
 **What the hash does not cover.** `evidence_sha256` seals the evidence document
 above and nothing else. Outside it: `receipt_id`, `receipt_url`, `created_at`,
@@ -952,6 +997,8 @@ labels. Without a label, the claim must not be written.
 | Fail-closed: no path to `APPROVE` with all tiers down | **UNPROVEN** | Becomes PROVEN once the G1 test exists |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
 | A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |
+| Topic selection ignores negated and embedded keywords, and a tie makes no rule | **PROVEN** | `keywords_match_on_word_boundaries_not_inside_other_words`, `a_negated_keyword_does_not_select_its_topic`, `a_tie_between_topics_creates_no_rule_and_is_counted` in `tests/rules.rs`; the two-word negation window is a stated limit, pinned by `negation_reaches_only_two_words_back` |
+| Learned rules overlap the standard questions on three of six topics | **PROVEN** | By construction of the catalogue (§1.3); whether the overlap helps or only duplicates is **UNPROVEN** |
 | Compiling learned rules adds no measurable hot-path latency | **UNPROVEN** | The compiled set is cached, but no benchmark has run with 8 rules |
 | The topic catalogue covers a useful share of real critiques | **UNPROVEN** | Only offline fixtures that imitate Reppo's response; no real critique has been distilled |
 | Every issued receipt survives a crash | **UNPROVEN** | Not true inside the 2-second snapshot window (§5.6); the snapshot cost at scale is unmeasured |
