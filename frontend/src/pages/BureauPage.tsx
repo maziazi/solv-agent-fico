@@ -1,0 +1,275 @@
+// `/bureau` — the Credit Bureau Directory (docs/DESIGN.md §4.3): the
+// directory table with real tiers, the learned guardrails (shadow rules
+// visibly not enforcing), and the Reppo quota meter. This page must not
+// claim an accuracy improvement — there is no labelled ground-truth set yet,
+// so the Attack Lab pass rate is simply not shown.
+
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import type { JSX } from "react";
+
+import { fetchDirectory, ApiError } from "../api";
+import { score, usd } from "../format";
+import { DecisionBadge, TierBadge, EffectChip } from "../components/Badges";
+import type { CounterpartyEntry, DirectoryResponse, LearnedRuleEntry } from "../types";
+
+type SortKey = "score" | "age";
+
+function sortEntries(
+  entries: CounterpartyEntry[],
+  key: SortKey,
+): CounterpartyEntry[] {
+  const sorted = [...entries];
+  // Nulls sort last in both orders: an UNRATED counterparty never jumps to
+  // the top by pretending to have the smallest (or largest) score.
+  sorted.sort((a, b) => {
+    if (key === "score") {
+      return (a.fico_effective ?? -1) < (b.fico_effective ?? -1) ? 1 : -1;
+    }
+    return (a.score_age_days ?? -1) < (b.score_age_days ?? -1) ? 1 : -1;
+  });
+  return sorted;
+}
+
+function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Element {
+  const [sortKey, setSortKey] = useState<SortKey>("score");
+  const sorted = useMemo(() => sortEntries(entries, sortKey), [entries, sortKey]);
+
+  return (
+    <section aria-labelledby="directory-title" className="border border-border bg-surface p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="directory-title" className="font-head text-xl font-bold">
+          Counterparty directory
+        </h2>
+        <p className="text-sm text-muted">
+          sort by{" "}
+          <button
+            type="button"
+            onClick={() => setSortKey("score")}
+            aria-pressed={sortKey === "score"}
+            className={`font-mono underline decoration-1 underline-offset-2 ${
+              sortKey === "score" ? "text-ink" : "text-muted"
+            }`}
+          >
+            score
+          </button>{" "}
+          ·{" "}
+          <button
+            type="button"
+            onClick={() => setSortKey("age")}
+            aria-pressed={sortKey === "age"}
+            className={`font-mono underline decoration-1 underline-offset-2 ${
+              sortKey === "age" ? "text-ink" : "text-muted"
+            }`}
+          >
+            evidence age
+          </button>
+        </p>
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="mt-4 border border-dashed border-border bg-bg p-4 text-sm text-muted">
+          No counterparty has a settled profile yet — an entry appears once a
+          Reppo evaluation settles for it (SPEC §5.3). Every check run on{" "}
+          <Link to="/" className="underline decoration-1 underline-offset-2">
+            the desk
+          </Link>{" "}
+          is already counted in the receipt metrics below.
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr>
+                <th scope="col" className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
+                  Counterparty
+                </th>
+                <th scope="col" className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
+                  Tier
+                </th>
+                <th scope="col" aria-sort={sortKey === "score" ? "descending" : "none"} className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
+                  FICO (effective)
+                </th>
+                <th scope="col" aria-sort={sortKey === "age" ? "descending" : "none"} className="border-b border-border pb-2 pr-4 text-left text-sm font-medium text-muted">
+                  Evidence age
+                </th>
+                <th scope="col" className="border-b border-border pb-2 text-left text-sm font-medium text-muted">
+                  Last decision
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((entry) => (
+                <tr key={entry.counterparty_id} className="border-b border-border last:border-b-0">
+                  <th scope="row" className="py-2.5 pr-4 text-left font-medium">
+                    <span className="block">{entry.counterparty_name}</span>
+                    <span className="block font-mono text-xs text-muted">{entry.target_url}</span>
+                  </th>
+                  <td className="py-2.5 pr-4">
+                    <TierBadge tier={entry.tier} />
+                  </td>
+                  <td className="py-2.5 pr-4 font-mono tabular-nums">
+                    {score(entry.fico_effective)}
+                    {entry.fico_effective !== null && entry.score_age_days !== null && (
+                      <span className="text-muted"> · {entry.score_age_days}d</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-4 font-mono text-sm tabular-nums">
+                    {entry.score_age_days === null ? "—" : `${entry.score_age_days} d`}
+                  </td>
+                  <td className="py-2.5">
+                    {entry.last_decision ? (
+                      <span className="flex flex-wrap items-center gap-2">
+                        <DecisionBadge decision={entry.last_decision.decision} />
+                        <span className="font-mono text-sm">{usd(entry.last_decision.amount_usd)}</span>
+                        <a
+                          href={entry.last_decision.receipt_url}
+                          className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2"
+                        >
+                          receipt ↗
+                        </a>
+                      </span>
+                    ) : (
+                      <span className="text-sm text-muted">no decision recorded</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Guardrails({ rules }: { rules: LearnedRuleEntry[] }): JSX.Element {
+  const active = rules.filter((rule) => rule.status === "active");
+  const shadow = rules.filter((rule) => rule.status === "shadow");
+  return (
+    <section aria-labelledby="guardrails-title" className="border border-border bg-surface p-5">
+      <h2 id="guardrails-title" className="font-head text-xl font-bold">
+        Learned guardrails
+      </h2>
+      <p className="mt-0.5 mb-4 text-sm text-muted">
+        Rules distilled from Reppo critiques ride the Tier-1 reflex as extra
+        questions. A rule reaches <span className="font-mono text-xs">active</span> only
+        through operator promotion (SPEC §5.5).
+      </p>
+
+      {rules.length === 0 ? (
+        <p className="border border-dashed border-border bg-bg p-4 text-sm text-muted">
+          No rules learned yet — none distilled, none promoted.
+        </p>
+      ) : (
+        <ul className="border-t border-border">
+          {[...active, ...shadow].map((rule) => (
+            <li key={rule.rule_id} className="border-b border-border py-3 last:border-b-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[13px] font-medium">{rule.rule_id}</span>
+                {rule.topic && <EffectChip effect={rule.topic} />}
+                <EffectChip effect={rule.effect} />
+                <span className="font-mono text-xs text-muted">p ≥ {rule.threshold}</span>
+                {rule.status === "shadow" ? (
+                  <span className="border border-hold-ink bg-hold-bg px-1.5 py-px font-mono text-xs text-hold-ink">
+                    shadow — not enforcing
+                  </span>
+                ) : (
+                  <span className="border border-approve-ink bg-approve-bg px-1.5 py-px font-mono text-xs text-approve-ink">
+                    active
+                  </span>
+                )}
+              </div>
+              {rule.created_from && (
+                <div className="mt-2 border border-dashed border-border bg-bg p-3">
+                  <p className="font-mono text-xs text-muted">
+                    born from Reppo critique · {rule.created_from.eval_id} · criterion{" "}
+                    {rule.created_from.criterion}
+                  </p>
+                  <p className="mt-1 font-mono text-[13px] leading-relaxed break-words">
+                    “{rule.created_from.critique_quote}”
+                  </p>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function QuotaMeter({ response }: { response: DirectoryResponse }): JSX.Element {
+  const { reppo } = response;
+  return (
+    <section aria-labelledby="quota-title" className="border border-border bg-surface p-5">
+      <h2 id="quota-title" className="font-head text-xl font-bold">
+        Reppo quota
+      </h2>
+      {reppo.worker_attached && reppo.credits_remaining !== null ? (
+        <p className="mt-2 font-mono text-3xl font-medium tabular-nums">
+          {reppo.credits_remaining}
+          <span className="text-lg text-muted"> / {reppo.quota_total}</span>
+          <span className="ml-2 text-sm text-muted">credits</span>
+        </p>
+      ) : (
+        <p className="mt-2 border border-dashed border-border bg-bg p-4 text-sm text-muted">
+          Audit worker not attached to this instance — no credits are in use
+          and there is no quota to meter. The free quota is {reppo.quota_total}{" "}
+          credits; one settled evaluation charges 100.
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function BureauPage(): JSX.Element {
+  const [data, setData] = useState<DirectoryResponse | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    fetchDirectory()
+      .then((directory) => {
+        setData(directory);
+        setFailed(false);
+      })
+      .catch((error: unknown) => {
+        setFailed(true);
+        if (!(error instanceof ApiError)) throw error;
+      });
+  }, []);
+
+  return (
+    <div className="mx-auto max-w-[76rem] px-4 py-8 sm:px-6">
+      <header className="mb-6">
+        <h1 className="font-head text-3xl font-bold tracking-tight">Bureau directory</h1>
+        <p className="mt-1 text-sm text-muted">
+          Who an agent has paid, what the bureau knows about them, and which
+          guardrails the gate is carrying. Numbers come from real receipts —
+          the{" "}
+          <Link to="/" className="underline decoration-1 underline-offset-2">
+            desk
+          </Link>{" "}
+          produces them.
+        </p>
+      </header>
+
+      <div className="flex flex-col gap-6" role="status" aria-live="polite">
+        {failed && (
+          <p role="alert" className="border-l-4 border-hold-ink bg-hold-bg px-4 py-3 text-sm">
+            The directory could not be read. Treat everything below as absent,
+            not as empty — a bureau you cannot read is not a bureau with
+            nobody in it.
+          </p>
+        )}
+        {data && (
+          <>
+            <DirectoryTable entries={data.counterparties} />
+            <Guardrails rules={data.learned_rules} />
+            <QuotaMeter response={data} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

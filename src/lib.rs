@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod bureau;
+pub mod directory;
 pub mod metrics;
 pub mod policy;
 pub mod reason;
@@ -22,7 +23,6 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
 use state::Store;
 use tier1::ClefClient;
 use tier2::ServClient;
@@ -75,6 +75,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
         .route("/api/v1/receipt/{id}", get(receipt::get_receipt))
+        .route("/bureau", get(web::spa::spa_index))
         .merge(web::routes())
         .with_state(state)
 }
@@ -103,40 +104,19 @@ pub async fn run_server(
     Ok(())
 }
 
-#[derive(Serialize)]
-struct DirectoryEntry {
-    counterparty_id: String,
-    counterparty_name: String,
-    target_url: String,
-}
-
-#[derive(Serialize)]
-struct DirectoryResponse {
-    counterparties: Vec<DirectoryEntry>,
-    /// SPEC §7.4: metrics computed from stored receipts. A metric without
-    /// data is `null`, and the desk renders it as an honest dash.
-    metrics: metrics::Metrics,
-}
-
-/// `GET /api/v1/directory` — every known counterparty plus bureau metrics,
-/// read from live state (SPEC §7.4). Tiers per counterparty, learned rules,
-/// and the Reppo quota join as PR-13 lands them.
-async fn directory(State(state): State<AppState>) -> Json<DirectoryResponse> {
-    let counterparties = state
-        .store()
-        .list_profiles()
-        .into_iter()
-        .map(|(counterparty_id, profile)| DirectoryEntry {
-            counterparty_id,
-            counterparty_name: profile.counterparty_name,
-            target_url: profile.target_url,
-        })
-        .collect();
-    let metrics = metrics::compute(&state.store().list_receipts());
-    Json(DirectoryResponse {
-        counterparties,
-        metrics,
-    })
+/// `GET /api/v1/directory` — every counterparty with its tier, the learned
+/// rules (active and shadow), the quota state, and real metrics, read from
+/// live state (SPEC §7.4). Assembly and its honesty rules live in
+/// `src/directory.rs`; this handler only gathers the store snapshots.
+async fn directory(State(state): State<AppState>) -> Json<directory::DirectoryPayload> {
+    let store = state.store();
+    let payload = directory::build(
+        api::now_unix(),
+        &store.list_profiles(),
+        &store.list_receipts(),
+        &store.learned_rules(),
+    );
+    Json(payload)
 }
 
 /// Resolves the listen port from the `PORT` environment variable.
@@ -349,6 +329,99 @@ mod tests {
             serde_json::Value::Null,
             "no token counts, no cost number"
         );
+    }
+
+    #[tokio::test]
+    async fn directory_enriches_counterparties_rules_and_quota() {
+        let (_dir, state) = test_state();
+        state.store().upsert_profile(
+            "cp-a".to_string(),
+            state::Profile {
+                counterparty_name: "Cold Start Ltd".to_string(),
+                target_url: "https://cold.example/api".to_string(),
+                score: None,
+            },
+        );
+        assert!(state.store().insert_receipt(
+            "slv_test_h_1".to_string(),
+            state::Receipt {
+                decision: "HOLD".to_string(),
+                amount_usd: 5.0,
+                created_at_unix: api::now_unix(),
+                evidence_sha256: "ab".to_string(),
+                evidence: serde_json::json!({ "request": { "counterparty_id": "cp-a" } }),
+                response: serde_json::json!({}),
+            },
+        ));
+        state.store().set_learned_rules(vec![state::LearnedRule {
+            rule_id: "SOLV-RULE-001".to_string(),
+            status: state::RuleStatus::Shadow,
+            topic: Some(rules::RuleTopic::GuaranteedRefund),
+            effect: policy::RuleEffect::ForcedHold,
+            threshold: rules::DEFAULT_THRESHOLD,
+            created_from: Some(rules::RuleSource {
+                eval_id: "ev_9".to_string(),
+                criterion: "guaranteed refund".to_string(),
+                critique_quote: "promises a refund no process can grant".to_string(),
+            }),
+        }]);
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let cp = &json["counterparties"][0];
+        assert_eq!(cp["counterparty_id"], "cp-a");
+        assert_eq!(cp["tier"], "UNRATED");
+        assert_eq!(cp["last_decision"]["decision"], "HOLD");
+        assert_eq!(cp["last_decision"]["receipt_id"], "slv_test_h_1");
+
+        let rule = &json["learned_rules"][0];
+        assert_eq!(rule["rule_id"], "SOLV-RULE-001");
+        assert_eq!(rule["status"], "shadow");
+        assert_eq!(rule["topic"], "guaranteed_refund");
+        assert_eq!(
+            rule["created_from"]["critique_quote"],
+            "promises a refund no process can grant"
+        );
+
+        let reppo = &json["reppo"];
+        assert_eq!(reppo["worker_attached"], false);
+        assert_eq!(reppo["credits_remaining"], serde_json::Value::Null);
+        assert_eq!(json["metrics"]["receipts_total"], 1);
+    }
+
+    #[tokio::test]
+    async fn bureau_serves_the_spa_shell_for_deep_links() {
+        let response = build_router(test_state().1)
+            .oneshot(
+                Request::builder()
+                    .uri("/bureau")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = response
+            .headers()
+            .get("content-security-policy")
+            .expect("CSP header")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(csp.contains("script-src 'self'"), "csp: {csp}");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("src=\"/static/spa.js\""), "shell: {body}");
     }
 
     #[tokio::test]
