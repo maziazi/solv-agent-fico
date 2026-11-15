@@ -1,13 +1,16 @@
 //! Receipt store and evidence hash tests (docs/SPEC.md §3.3 G4, §6.3, §7.3,
 //! PR-08). All offline: Tier 1 is a mock, the router runs in-process.
 //!
-//! The hash is checked three ways so a bug in the library's canonical form
-//! cannot hide behind itself: a known-answer vector produced by Python's
-//! `json.dumps(..., sort_keys=True, separators=(",", ":"))`, a verifier in
-//! this file that canonicalises through a different mechanism, and the
-//! G4 property run over arbitrary requests.
+//! The hash is checked so a bug in the library's canonical form cannot hide
+//! behind itself: known-answer vectors produced by `tools/recompute_receipt.py`
+//! (Python stdlib, `json.dumps(sort_keys=True, separators=(",", ":"),
+//! ensure_ascii=False)`), the same script run live as the verifier for every
+//! receipt below (`recompute`), and the G4 property run over arbitrary
+//! requests. The script needs `python3` on the test machine.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::body::Body;
@@ -15,7 +18,6 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use proptest::prelude::*;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use solv::policy::{Decision, DecisionKind, PolicyConfig};
 use solv::reason::{Reason, ReasonCode};
 use solv::receipt::{
@@ -34,24 +36,39 @@ const DAY: u64 = 86_400;
 // Verifier: what a third party would do with a published receipt.
 // ---------------------------------------------------------------------------
 
-/// Rebuilds `value` with every object as a `BTreeMap`, so `serde_json`'s
-/// own compact serializer emits sorted keys — a different route to the
-/// canonical text than the library's hand-written writer.
-fn sorted(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let sorted_map: BTreeMap<String, Value> =
-                map.iter().map(|(k, v)| (k.clone(), sorted(v))).collect();
-            serde_json::to_value(sorted_map).unwrap()
-        }
-        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
-        other => other.clone(),
-    }
+/// Runs the committed reference script (`tools/recompute_receipt.py
+/// --canonical -`) on `value` and returns `(canonical_text, sha256)`.
+/// Sharing no code with the service, it is the third party of SPEC §6.3.
+fn reference_canonical(value: &Value) -> (String, String) {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tools/recompute_receipt.py");
+    let mut child = Command::new("python3")
+        .args([script, "--canonical", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("python3 is required to run the receipt verifier tests");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(value.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "reference script failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+    let text = lines.next().unwrap().to_string();
+    let digest = lines.next().unwrap().to_string();
+    (text, digest)
 }
 
 fn recompute(evidence: &Value) -> String {
-    let text = serde_json::to_string(&sorted(evidence)).unwrap();
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    reference_canonical(evidence).1
 }
 
 // ---------------------------------------------------------------------------
@@ -66,8 +83,8 @@ fn sha256_hex_matches_the_published_hello_vector() {
     );
 }
 
-/// Expected values come from `tests/receipt.rs`'s reference script run in
-/// Python: `json.dumps(v, sort_keys=True, separators=(",", ":"),
+/// Expected values come from `python3 tools/recompute_receipt.py
+/// --canonical`: `json.dumps(v, sort_keys=True, separators=(",", ":"),
 /// ensure_ascii=False)` then SHA-256 of its UTF-8 bytes. Covers nesting,
 /// key sorting, integral floats keeping `.0`, escapes, a control
 /// character, and raw non-ASCII.
@@ -88,6 +105,77 @@ fn canonical_form_and_hash_match_a_python_reference_vector() {
         evidence_sha256(&value),
         "a2224d2144591acc98d8980b525c471381b942fd73adce252103453205784f09"
     );
+}
+
+/// Every row: JSON literal as received, and the form Python's
+/// `json.dumps` prints for it (see `tools/recompute_receipt.py`). The
+/// subtle rows are the ones `serde_json` prints differently: below 1e-4
+/// Python writes `1e-05` / `3.2e-05` where `serde_json` writes `0.00001`
+/// / `0.000032`, and from 1e16 up it writes `1e+16`.
+const PYTHON_FLOAT_FORMS: &[(&str, &str)] = &[
+    ("1e-7", "1e-07"),
+    ("0.000032", "3.2e-05"),
+    ("1e-5", "1e-05"),
+    ("0.0001", "0.0001"),
+    ("0.00012345", "0.00012345"),
+    ("1e15", "1000000000000000.0"),
+    ("1e16", "1e+16"),
+    ("123456789012345680.0", "1.2345678901234568e+17"),
+    ("1e21", "1e+21"),
+    ("1.5e300", "1.5e+300"),
+    ("5e-324", "5e-324"),
+    ("1.7976931348623157e308", "1.7976931348623157e+308"),
+    ("0.30000000000000004", "0.30000000000000004"),
+    ("-0.0", "-0.0"),
+    ("50.0", "50.0"),
+    ("14", "14"),
+    ("0", "0"),
+    ("-3", "-3"),
+];
+
+#[test]
+fn floats_are_printed_in_the_python_repr_form() {
+    for (literal, expected) in PYTHON_FLOAT_FORMS {
+        let value: Value = serde_json::from_str(literal).unwrap();
+        assert_eq!(&canonical_json(&value), expected, "literal {literal}");
+    }
+}
+
+/// The whole table as one array, hashed: the expected text and digest are
+/// the output of `python3 tools/recompute_receipt.py --canonical` on the
+/// same array.
+#[test]
+fn float_array_hash_matches_the_python_reference_vector() {
+    let literals: Vec<&str> = PYTHON_FLOAT_FORMS.iter().map(|(l, _)| *l).collect();
+    let value: Value = serde_json::from_str(&format!("[{}]", literals.join(","))).unwrap();
+    let expected_text = format!(
+        "[{}]",
+        PYTHON_FLOAT_FORMS
+            .iter()
+            .map(|(_, e)| *e)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert_eq!(canonical_json(&value), expected_text);
+    assert_eq!(
+        evidence_sha256(&value),
+        "f3f13408e0076973bfca7bd6ee6e264dac896a6022410d516aea5935ce66014b"
+    );
+}
+
+/// Guards the constants above against drift: the live script and the
+/// service must agree on the same arrays, including key order.
+#[test]
+fn live_reference_script_agrees_with_the_service() {
+    let literals: Vec<&str> = PYTHON_FLOAT_FORMS.iter().map(|(l, _)| *l).collect();
+    let value: Value = serde_json::from_str(&format!(
+        "{{\"floats\":[{}],\"\u{e9}\":1,\"b\":{{\"z\":1e-9,\"a\":2.5e-5}}}}",
+        literals.join(",")
+    ))
+    .unwrap();
+    let (text, digest) = reference_canonical(&value);
+    assert_eq!(canonical_json(&value), text);
+    assert_eq!(evidence_sha256(&value), digest);
 }
 
 #[test]
@@ -195,6 +283,31 @@ fn evidence_carries_every_section_of_spec_6_3() {
     assert_eq!(evidence["decision"]["max_safe_spend"], 500.0);
 }
 
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "evidence floats must be finite")]
+fn a_non_finite_float_never_reaches_a_sealed_receipt() {
+    let config = PolicyConfig::default();
+    let decision = approve_decision();
+    build_evidence(&EvidenceInput {
+        counterparty_id: "x",
+        target_url: "https://x.example.com",
+        amount_usd: f64::NAN,
+        service_description: "x",
+        settled: None,
+        effective: None,
+        tier1: Tier1Evidence {
+            model: "clef-flash",
+            answers: None,
+            latency_ms: 1,
+        },
+        tier2: None,
+        rules_applied: &[],
+        config: &config,
+        decision: &decision,
+    });
+}
+
 #[test]
 fn unrated_counterparty_and_skipped_tiers_are_null_not_empty_objects() {
     let config = PolicyConfig::default();
@@ -252,6 +365,23 @@ fn router_with(
 }
 
 async fn post(router: &axum::Router, amount: f64, description: &str) -> (StatusCode, Value) {
+    post_as(
+        router,
+        "DataFeed Pro",
+        "https://api.example.com/v1/feed",
+        amount,
+        description,
+    )
+    .await
+}
+
+async fn post_as(
+    router: &axum::Router,
+    counterparty_name: &str,
+    target_url: &str,
+    amount: f64,
+    description: &str,
+) -> (StatusCode, Value) {
     let response = router
         .clone()
         .oneshot(
@@ -261,8 +391,8 @@ async fn post(router: &axum::Router, amount: f64, description: &str) -> (StatusC
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "counterparty_name": "DataFeed Pro",
-                        "target_url": "https://api.example.com/v1/feed",
+                        "counterparty_name": counterparty_name,
+                        "target_url": target_url,
                         "amount_usd": amount,
                         "service_description": description
                     })
@@ -484,22 +614,116 @@ fn seen_ids() -> &'static Mutex<HashSet<String>> {
     SEEN.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(96))]
+/// Any unicode scalar value, control characters included, up to `max` chars.
+fn any_text(max: usize) -> impl Strategy<Value = String> {
+    prop::collection::vec(any::<char>(), 0..max).prop_map(|chars| chars.into_iter().collect())
+}
 
+/// Log-uniform over 1e-12..1, so tiny probabilities are as likely as large
+/// ones, plus the uncertain band that forces Tier 2 escalation.
+fn probability() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        (-12.0f64..0.0).prop_map(|exponent| 10f64.powf(exponent)),
+        0.10f64..0.90,
+    ]
+}
+
+/// Micro-dollar amounts and ordinary ones.
+fn amount() -> impl Strategy<Value = f64> {
+    prop_oneof![1e-9f64..1e-3, 0.01f64..5_000.0]
+}
+
+/// Any finite float: uniform over bit patterns (every exponent, subnormals,
+/// both zeros) and short decimal literals like the ones people send.
+fn finite_float() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        any::<u64>()
+            .prop_map(f64::from_bits)
+            .prop_filter("finite", |f| f.is_finite()),
+        (any::<i32>(), -40i32..40).prop_map(|(mantissa, exponent)| {
+            format!("{mantissa}e{exponent}").parse::<f64>().unwrap()
+        }),
+    ]
+}
+
+fn tier1_for(mode: u8, probability: f64) -> MockClefClient {
+    match mode {
+        0 => MockClefClient {
+            fail_with: Some(MockFailure::Status(503)),
+            ..MockClefClient::default()
+        },
+        1 => MockClefClient {
+            fail_with: Some(MockFailure::Parse),
+            ..MockClefClient::default()
+        },
+        _ => MockClefClient::with_injection(probability),
+    }
+}
+
+fn tier2_for(mode: u8) -> Arc<dyn solv::tier2::ServClient> {
+    use solv::tier2::{MockServClient, ServVerdict};
+    let client = match mode {
+        0 => MockServClient {
+            verdict: Some(ServVerdict::Approve),
+            ..MockServClient::default()
+        },
+        1 => MockServClient {
+            verdict: Some(ServVerdict::Revise),
+            ..MockServClient::default()
+        },
+        2 => MockServClient {
+            verdict: Some(ServVerdict::Mismatch),
+            ..MockServClient::default()
+        },
+        3 => MockServClient {
+            verdict: Some(ServVerdict::GuardRefusal),
+            ..MockServClient::default()
+        },
+        4 => MockServClient {
+            fail_with_status: Some(502),
+            ..MockServClient::default()
+        },
+        // No verdict configured: the mock answers with a parse error.
+        _ => MockServClient::default(),
+    };
+    Arc::new(client)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// G4 over hostile and degenerate input: unicode names and URLs with
+    /// control characters, micro amounts, tiny Tier 1 probabilities, every
+    /// Tier 2 verdict, and failed Tier 1 / Tier 2 calls. The third party
+    /// (the reference script) recomputes every published hash.
     #[test]
     fn g4_every_decision_has_a_receipt_whose_hash_recomputes(
-        amount in 0.01f64..5_000.0,
-        description in ".{0,400}",
-        injection in 0.0f64..1.0,
+        amount in amount(),
+        name in any_text(40),
+        url in any_text(60),
+        description in any_text(300),
+        injection in probability(),
+        tier1_mode in 0u8..6,
+        tier2_mode in 0u8..6,
         rated in any::<bool>(),
     ) {
         runtime().block_on(async {
-            let profiles = if rated { vec![prime_profile()] } else { vec![] };
-            let (router, _store, _dir) =
-                router_with(MockClefClient::with_injection(injection), profiles);
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path().join("state.json")).unwrap();
+            if rated {
+                store.upsert_profile(
+                    name.clone(),
+                    Profile {
+                        counterparty_name: name.clone(),
+                        target_url: url.clone(),
+                        score: Some(prime_settled()),
+                    },
+                );
+            }
+            let tier1: Arc<dyn ClefClient> = Arc::new(tier1_for(tier1_mode, injection));
+            let router = build_router(AppState::new(Arc::clone(&store), tier1, tier2_for(tier2_mode)));
 
-            let (status, body) = post(&router, amount, &description).await;
+            let (status, body) = post_as(&router, &name, &url, amount, &description).await;
             prop_assert_eq!(status, StatusCode::OK);
             let id = body["receipt_id"].as_str().unwrap().to_string();
             prop_assert!(seen_ids().lock().unwrap().insert(id.clone()), "receipt id reused");
@@ -512,16 +736,56 @@ proptest! {
                 prop_assert_eq!(&receipt["evidence"]["decision"]["decision"], &body["decision"]);
                 prop_assert_eq!(&receipt["evidence_sha256"], &body["evidence_sha256"]);
                 prop_assert_eq!(
-                    recompute(&receipt["evidence"]),
-                    body["evidence_sha256"].as_str().unwrap()
-                );
-                prop_assert_eq!(
                     receipt["evidence"]["request"]["amount_usd"].as_f64().unwrap(),
                     amount
                 );
+                prop_assert_eq!(receipt["evidence"]["request"]["counterparty_id"].as_str().unwrap(), &name);
+                prop_assert_eq!(receipt["evidence"]["request"]["target_url"].as_str().unwrap(), &url);
+                if uri.starts_with("/api") {
+                    prop_assert_eq!(
+                        recompute(&receipt["evidence"]),
+                        body["evidence_sha256"].as_str().unwrap()
+                    );
+                }
             }
             Ok(())
         })?;
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(48))]
+
+    /// The float formatter against Python's `repr` for arbitrary finite
+    /// floats — the property that would have caught `1e-05` vs `0.00001`.
+    #[test]
+    fn arbitrary_floats_print_exactly_as_python_does(
+        floats in prop::collection::vec(finite_float(), 1..120),
+    ) {
+        let value = Value::Array(floats.iter().map(|f| json!(f)).collect());
+        let (text, digest) = reference_canonical(&value);
+        prop_assert_eq!(canonical_json(&value), text);
+        prop_assert_eq!(evidence_sha256(&value), digest);
+    }
+
+    /// Key order and string escaping against Python for arbitrary unicode
+    /// keys and values (control characters, astral planes, lone-surrogate
+    /// neighbours), with floats nested inside.
+    #[test]
+    fn arbitrary_documents_canonicalise_exactly_as_python_does(
+        entries in prop::collection::vec((any_text(6), any_text(40), finite_float()), 0..8),
+    ) {
+        let mut object = serde_json::Map::new();
+        for (key, text, float) in &entries {
+            object.insert(
+                key.clone(),
+                json!({ "s": text, "f": float, "n": [text.len(), null, true] }),
+            );
+        }
+        let value = Value::Object(object);
+        let (text, digest) = reference_canonical(&value);
+        prop_assert_eq!(canonical_json(&value), text);
+        prop_assert_eq!(evidence_sha256(&value), digest);
     }
 }
 

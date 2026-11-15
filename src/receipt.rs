@@ -4,12 +4,16 @@
 //! document of §6.3, its SHA-256, and the response that was returned. The
 //! evidence is stored whole so any third party can recompute the hash.
 //!
-//! Canonical form, which a verifier must reproduce byte for byte: object
-//! keys sorted by their UTF-8 bytes, no whitespace, strings escaped per
-//! RFC 8259 with only the mandatory escapes (non-ASCII stays raw), numbers
-//! in shortest round-trip form with integral floats keeping their `.0`
-//! (what Rust's `serde_json` and Python's `json.dumps` both print). The
-//! hash is the lowercase hex SHA-256 of that text.
+//! Canonical form, which a verifier must reproduce byte for byte, is the
+//! output of Python's `json.dumps(v, sort_keys=True, separators=(",", ":"),
+//! ensure_ascii=False)`: object keys sorted by code point (the same order
+//! as their UTF-8 bytes), no whitespace, strings escaped per RFC 8259 with
+//! only the mandatory escapes (non-ASCII stays raw), and floats in
+//! Python's `repr` form. That float form differs from `serde_json`'s below
+//! 1e-4 and above 1e16, so it is implemented here ([`format_float`]) and
+//! never delegated. This is not RFC 8785 (JCS). The reference verifier is
+//! `tools/recompute_receipt.py`; the hash is the lowercase hex SHA-256 of
+//! the canonical text.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -71,7 +75,67 @@ fn write_canonical(value: &Value, out: &mut String) {
             }
             out.push(']');
         }
+        Value::Number(number) => match number.as_f64().filter(|_| number.is_f64()) {
+            Some(float) => out.push_str(&format_float(float)),
+            None => out.push_str(&number.to_string()),
+        },
         scalar => out.push_str(&scalar.to_string()),
+    }
+}
+
+/// Formats a finite float exactly as Python's `repr(float)` does, which is
+/// what the reference verifier prints.
+///
+/// Digits are the shortest that round-trip (Rust's `{:e}`). With `exp10`
+/// the decimal exponent of the leading digit: decimal notation when
+/// `-4 <= exp10 < 16`, with integral values keeping a trailing `.0`;
+/// otherwise scientific with a signed exponent of at least two digits
+/// (`1e-05`, `1e+16`, `1.5e+300`, `5e-324`). Zero is `0.0` / `-0.0`.
+pub fn format_float(value: f64) -> String {
+    debug_assert!(value.is_finite(), "JSON has no NaN or infinity");
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            "-0.0"
+        } else {
+            "0.0"
+        }
+        .to_string();
+    }
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("LowerExp always writes an exponent");
+    let exp10: i32 = exponent.parse().expect("the exponent is an integer");
+    let (sign, mantissa) = match mantissa.strip_prefix('-') {
+        Some(unsigned) => ("-", unsigned),
+        None => ("", mantissa),
+    };
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+
+    if !(-4..16).contains(&exp10) {
+        let (first, rest) = digits.split_at(1);
+        let mantissa = if rest.is_empty() {
+            first.to_string()
+        } else {
+            format!("{first}.{rest}")
+        };
+        let exponent_sign = if exp10 < 0 { '-' } else { '+' };
+        return format!(
+            "{sign}{mantissa}e{exponent_sign}{:02}",
+            exp10.unsigned_abs()
+        );
+    }
+    if exp10 < 0 {
+        let zeros = "0".repeat(exp10.unsigned_abs() as usize - 1);
+        return format!("{sign}0.{zeros}{digits}");
+    }
+    let integer_len = exp10 as usize + 1;
+    if digits.len() <= integer_len {
+        let zeros = "0".repeat(integer_len - digits.len());
+        format!("{sign}{digits}{zeros}.0")
+    } else {
+        let (integer, fraction) = digits.split_at(integer_len);
+        format!("{sign}{integer}.{fraction}")
     }
 }
 
@@ -119,6 +183,21 @@ pub struct EvidenceInput<'a> {
 /// `profile_snapshot` is `null` for an UNRATED counterparty rather than an
 /// object of empty fields masquerading as an audit.
 pub fn build_evidence(input: &EvidenceInput<'_>) -> Value {
+    // `json!` turns NaN and infinity into `null` without a word, which would
+    // seal a receipt that does not say what the decision rested on.
+    debug_assert!(
+        [
+            input.amount_usd,
+            input.decision.max_safe_spend_usd,
+            input.config.caps.prime_usd,
+            input.config.caps.standard_usd,
+            input.config.caps.subprime_usd,
+            input.config.absolute_cap_usd,
+        ]
+        .iter()
+        .all(|float| float.is_finite()),
+        "evidence floats must be finite"
+    );
     let profile_snapshot = input.settled.map(|settled| {
         json!({
             "fico_raw": input.effective.map(|e| e.fico_raw),

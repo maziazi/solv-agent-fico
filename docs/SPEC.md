@@ -662,14 +662,41 @@ and a public receipt does not become a billboard for an attacker's payload. The
 verbatim text still lives, bounded, in `reasons[].evidence.quote` under the
 rules in §6.1.
 
-`canonical_json` means sorted keys and no superfluous whitespace, so a third
-party can recompute the hash. Precisely: object keys sorted by their UTF-8
-bytes; no whitespace; strings escaped per RFC 8259 with only the mandatory
-escapes (non-ASCII stays raw, control characters become `\u00xx`); numbers in
-shortest round-trip form, integral floats keeping their `.0` (as Python's
-`json.dumps` prints them). The hash is the lowercase hex SHA-256 of that text,
-and `GET /receipt/:id` returns the evidence document so the check needs nothing
-else. Notes on the shape:
+`canonical_json` is defined as the output of Python's
+`json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`,
+encoded as UTF-8. It is **not** RFC 8785 (JCS): JCS prints numbers in the
+ECMAScript form, which switches to scientific notation below `1e-6` and from
+`1e21`, whereas Python switches below `1e-4` and from `1e16`. JCS writes
+`0.00001` where Python writes `1e-05`, and `10000000000000000` where Python
+writes `1e+16`, so a JCS library will not reproduce this hash. Precisely:
+
+- object keys sorted by code point (identical to sorting their UTF-8 bytes);
+  no whitespace anywhere
+- strings escaped per RFC 8259 with only the mandatory escapes: `\"`, `\\`,
+  `\b`, `\f`, `\n`, `\r`, `\t`, and `\u00xx` (lowercase hex) for the other
+  control characters below U+0020; everything else, including non-ASCII and
+  U+007F, stays raw
+- integers (JSON numbers with no fraction or exponent) print as written
+- floats print as Python's `repr(float)`: the shortest decimal digits that
+  round-trip, then, with `exp10` the decimal exponent of the leading digit,
+  **decimal notation when `-4 <= exp10 < 16`** (`0.0001`, `50.0`,
+  `1000000000000000.0`: an integral float keeps its `.0`), otherwise
+  **scientific notation** `d[.ddd]e±XX` with a signed exponent of at least two
+  digits (`1e-05`, `3.2e-05`, `1e+16`, `1.5e+300`, `5e-324`). Zero is `0.0` or
+  `-0.0`; NaN and infinity cannot occur (the service asserts it)
+- Rust's `serde_json` prints `0.00001` and `1e-7` for the first and third
+  examples, so the service formats floats itself and never delegates the form
+
+The hash is the lowercase hex SHA-256 of that text. `GET /receipt/:id` returns
+the evidence document, and `tools/recompute_receipt.py` (Python standard
+library only) recomputes and checks it:
+
+```sh
+curl -s https://HOST/api/v1/receipt/$ID | python3 tools/recompute_receipt.py
+```
+
+The service's tests run that same script as the verifier for every receipt they
+produce. Notes on the shape:
 
 - `counterparty_id` is the key the profile was looked up by (today the
   counterparty name).
