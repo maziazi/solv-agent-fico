@@ -63,21 +63,21 @@
 :root {
   color-scheme: light;
   --bg: #f9f7f6;
-  --surface: #efedeb;
+  --surface: #ffffff;
   --wash: #efedeb;
+  --border: #e3e0dd;
   --ink: #332d28;
   --muted: #5a5049;
   --accent: #dc5318;
   --accent-ink: #b8420f;
   --accent-fill: #b8420f;
-  /* Status colours. -ink is text on the page or a card (>= 5.5:1); -solid is a
-   * badge or panel fill with the text colour named in docs/DESIGN.md §2.4. */
-  --approve-ink: #166534;
-  --approve-solid: #166534;
-  --hold-ink: #92400e;
-  --hold-solid: #f2b13c;
+  --accent-soft: #f6e3da;
+  --approve-ink: #15803d;
+  --approve-bg: #dcfce7;
+  --hold-ink: #b45309;
+  --hold-bg: #fef3c7;
   --block-ink: #b91c1c;
-  --block-solid: #b91c1c;
+  --block-bg: #fee2e2;
   --radius: 0.75rem;
 }
 
@@ -85,6 +85,7 @@
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-wash: var(--wash);
+  --color-border: var(--border);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
@@ -92,11 +93,11 @@
   --color-accent-fill: var(--accent-fill);
   --color-accent-soft: var(--accent-soft);
   --color-approve-ink: var(--approve-ink);
-  --color-approve-solid: var(--approve-solid);
+  --color-approve-bg: var(--approve-bg);
   --color-hold-ink: var(--hold-ink);
-  --color-hold-solid: var(--hold-solid);
+  --color-hold-bg: var(--hold-bg);
   --color-block-ink: var(--block-ink);
-  --color-block-solid: var(--block-solid);
+  --color-block-bg: var(--block-bg);
 
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-head: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -121,15 +122,14 @@ html {
   }
 }
 
-/* Cards are flat: one solid fill, no border, no shadow, no gradient. A card
- * sitting inside a wash section takes the page colour so it still reads as a
- * separate shape (two fills per section at most). */
-.bg-wash .bg-surface {
-  background-color: var(--bg);
-}
-
-/* With no border to carry the shape, every card fill gets the theme radius. */
-.bg-surface {
+/* Every fully bordered box gets the theme radius; dividers (border-b, border-t)
+ * are unaffected because they do not carry the plain `border` class. */
+.border.border-border,
+.border.border-ink,
+.border.border-accent-fill,
+.border.border-approve-ink,
+.border.border-hold-ink,
+.border.border-block-ink {
   border-radius: var(--radius);
 }
 
@@ -146,7 +146,7 @@ h3 {
 }
 
 ::selection {
-  background: var(--wash);
+  background: var(--accent-soft);
   color: var(--ink);
 }
 

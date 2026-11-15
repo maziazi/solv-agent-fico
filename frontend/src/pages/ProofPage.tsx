@@ -85,7 +85,7 @@ function curlFor(preset: Preset): string {
 
 function CodeBlock({ children }: { children: string }): JSX.Element {
   return (
-    <pre className="overflow-x-auto rounded-lg bg-wash p-3 font-mono text-xs leading-relaxed">
+    <pre className="overflow-x-auto rounded-lg border border-border bg-wash p-3 font-mono text-xs leading-relaxed">
       {children}
     </pre>
   );
@@ -113,7 +113,7 @@ function ResultView({
   }
   if (run.kind === "error") {
     return (
-      <p role="alert" className="mt-4 rounded-lg bg-block-solid p-3 text-sm text-white">
+      <p role="alert" className="mt-4 rounded-lg border border-block-ink/40 bg-block-bg p-3 text-sm text-block-ink">
         {run.message}
       </p>
     );
@@ -124,8 +124,10 @@ function ResultView({
   return (
     <div className="mt-4 space-y-3" aria-live="polite">
       <p
-        className={`rounded-lg p-3 text-sm ${
-          matches ? "bg-approve-solid text-white" : "bg-hold-solid text-ink"
+        className={`rounded-lg border p-3 text-sm ${
+          matches
+            ? "border-approve-ink/40 bg-approve-bg text-approve-ink"
+            : "border-hold-ink/40 bg-hold-bg text-hold-ink"
         }`}
       >
         Expected {expected}. Got {result.decision}.{" "}
@@ -142,7 +144,7 @@ function ResultView({
       </div>
       <ul className="space-y-2">
         {result.reasons.map((reason, index) => (
-          <li key={`${reason.code}-${index}`} className="rounded-lg bg-surface p-3">
+          <li key={`${reason.code}-${index}`} className="rounded-lg border border-border bg-surface p-3">
             <p className="font-mono text-xs font-medium">{reason.code}</p>
             <p className="mt-0.5 text-sm text-muted">{reason.message}</p>
           </li>
@@ -171,7 +173,7 @@ function ExampleRun({
 }): JSX.Element {
   const [run, start] = useRun();
   return (
-    <article className="rounded-xl bg-surface p-5">
+    <article className="rounded-xl border border-border bg-surface p-5">
       <h3 className="text-lg font-semibold">{preset.name}</h3>
       <p className="mt-1 text-sm text-muted">
         <span className="font-medium text-ink">Expect:</span> {expectText}
@@ -247,14 +249,14 @@ function MarketplacesPanel(): JSX.Element {
           ["2", "Open the receipt", "The receipt shows the decision, the reasons, the policy version and a hash."],
           ["3", "Verify the hash", "Press Verify hash. Your browser recomputes the SHA-256 of the evidence and compares it."],
         ].map(([n, title, body]) => (
-          <li key={n} className="rounded-xl bg-surface p-5">
+          <li key={n} className="rounded-xl border border-border bg-surface p-5">
             <span className="font-mono text-xs text-accent-ink">STEP {n}</span>
             <h3 className="mt-1 text-lg font-semibold">{title}</h3>
             <p className="mt-1 text-sm text-muted">{body}</p>
           </li>
         ))}
       </ol>
-      <article className="rounded-xl bg-surface p-5">
+      <article className="rounded-xl border border-border bg-surface p-5">
         <p className="text-sm text-muted">
           <span className="font-medium text-ink">Expect:</span> a BLOCK within about a second, then a
           receipt page with a Verify hash button that reports a match.
@@ -326,7 +328,7 @@ function ProvidersPanel(): JSX.Element {
     <div className="space-y-6">
       <Gets>A score from an independent evaluation and a public page you can show to buyers.</Gets>
 
-      <article className="rounded-xl bg-surface p-5">
+      <article className="rounded-xl border border-border bg-surface p-5">
         <p className="text-sm text-muted">
           <span className="font-medium text-ink">Expect:</span> the profile of{" "}
           <span className="font-mono">{DEMO_COUNTERPARTY}</span> with its band, score, and the age
@@ -341,7 +343,7 @@ function ProvidersPanel(): JSX.Element {
             </p>
           )}
           {directory.kind === "ready" && !present && (
-            <p className="rounded-lg bg-hold-solid p-3 text-sm text-ink">
+            <p className="rounded-lg border border-hold-ink/40 bg-hold-bg p-3 text-sm text-hold-ink">
               The demo profile is not loaded on this server. Start Solv with
               SOLV_SEED_FILE=seed/demo_profiles.json to see a rated profile here.
             </p>
@@ -383,7 +385,7 @@ function ProvidersPanel(): JSX.Element {
             ["2", "An audit runs", "Reppo evaluates the claim. It takes 2 to 5 minutes and costs the operator 440 credits."],
             ["3", "Your profile appears", "The score shows in the registry and expires after 90 days unless it is renewed."],
           ].map(([n, title, body]) => (
-            <li key={n} className="rounded-xl bg-surface p-5">
+            <li key={n} className="rounded-xl border border-border bg-surface p-5">
               <span className="font-mono text-xs text-accent-ink">STEP {n}</span>
               <h4 className="mt-1 font-semibold">{title}</h4>
               <p className="mt-1 text-sm text-muted">{body}</p>
@@ -420,11 +422,11 @@ export function ProofPage(): JSX.Element {
             role="tab"
             aria-selected={tab.id === active}
             aria-controls={`panel-${tab.id}`}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold ${
-tab.id === active
-              ? "bg-ink text-bg"
-              : "bg-surface text-muted hover:text-ink"
-          }`}
+            className={`rounded-lg border px-4 py-2 text-sm font-semibold ${
+              tab.id === active
+                ? "border-ink bg-ink text-bg"
+                : "border-border bg-surface text-muted hover:text-ink"
+            }`}
           >
             {tab.label}
           </Link>

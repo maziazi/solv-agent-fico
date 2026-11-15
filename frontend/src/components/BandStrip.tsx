@@ -7,15 +7,11 @@ import type { JSX } from "react";
 
 import { BANDS, TRACK_MAX, TRACK_MIN, bandCapLabel, bandRange } from "../bands";
 
-// A five-step scale needs five distinguishable fills. They are solid hex
-// values (the accent mixed into the page colour at 15/35/55/75 per cent,
-// computed once), not opacity classes. This is the one place steps of one hue
-// are intended: it is a data scale, not a card.
 const TINT: Record<string, string> = {
-  POOR: "bg-[#f5dfd5]",
-  FAIR: "bg-[#efbea8]",
-  GOOD: "bg-[#e99d7c]",
-  VERY_GOOD: "bg-[#e37c50]",
+  POOR: "bg-accent/15",
+  FAIR: "bg-accent/35",
+  GOOD: "bg-accent/55",
+  VERY_GOOD: "bg-accent/75",
   EXCEPTIONAL: "bg-accent",
 };
 
@@ -33,7 +29,7 @@ export function BandStrip(): JSX.Element {
       <div
         role="img"
         aria-label="Score track from 300 to 850 in five bands"
-        className="flex h-3 w-full overflow-hidden rounded-full"
+        className="flex h-3 w-full overflow-hidden rounded-full border border-border"
       >
         {scored.map((band) => {
           const size = (band.ceiling as number) - (band.floor as number) + 1;
@@ -55,7 +51,7 @@ export function BandStrip(): JSX.Element {
         {scored.map((band) => (
           <li
             key={band.id}
-            className="rounded-xl bg-surface p-4"
+            className="rounded-xl border border-border bg-surface p-4"
           >
             <span
               aria-hidden
@@ -70,7 +66,7 @@ export function BandStrip(): JSX.Element {
       </ul>
 
       {unrated && (
-        <p className="mt-4 rounded-xl bg-surface px-4 py-3 text-sm text-muted">
+        <p className="mt-4 rounded-xl border border-dashed border-border bg-surface px-4 py-3 text-sm text-muted">
           <span className="font-semibold text-ink">Unrated</span> has no number
           at all. Nobody has evaluated it, so the request holds for a human.
         </p>

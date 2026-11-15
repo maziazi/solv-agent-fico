@@ -48,7 +48,7 @@ function Block({
 
 function Code({ children }: { children: string }): JSX.Element {
   return (
-    <pre className="overflow-x-auto rounded-xl bg-surface px-4 py-3 font-mono text-xs leading-relaxed">
+    <pre className="overflow-x-auto rounded-xl border border-border bg-surface px-4 py-3 font-mono text-xs leading-relaxed">
       <code>{children}</code>
     </pre>
   );
@@ -56,8 +56,8 @@ function Code({ children }: { children: string }): JSX.Element {
 
 function Unproven({ children }: { children: ReactNode }): JSX.Element {
   return (
-    <p className="flex gap-3 rounded-xl bg-hold-solid p-4 text-sm text-ink">
-      <span className="h-fit rounded-full bg-hold-solid px-2 py-0.5 font-mono text-[0.7rem] font-semibold text-ink">
+    <p className="flex gap-3 rounded-xl border border-hold-ink/30 bg-hold-bg/50 p-4 text-sm">
+      <span className="h-fit rounded-full border border-hold-ink/40 bg-hold-bg px-2 py-0.5 font-mono text-[0.7rem] font-semibold text-hold-ink">
         UNPROVEN
       </span>
       <span>{children}</span>
@@ -73,10 +73,10 @@ function DataTable({
   rows: ReactNode[][];
 }): JSX.Element {
   return (
-    <div className="overflow-x-auto rounded-xl bg-surface">
+    <div className="overflow-x-auto rounded-xl border border-border bg-surface">
       <table className="w-full border-collapse text-left text-sm">
         <thead>
-          <tr className="bg-wash text-xs uppercase tracking-wider text-muted">
+          <tr className="border-b border-border bg-wash text-xs uppercase tracking-wider text-muted">
             {head.map((label) => (
               <th key={label} scope="col" className="px-4 py-2.5 font-medium">
                 {label}
@@ -86,7 +86,7 @@ function DataTable({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={index} className="">
+            <tr key={index} className="border-b border-border last:border-0">
               {row.map((cell, column) => (
                 <td key={column} className="px-4 py-2.5 align-top">
                   {cell}
@@ -132,13 +132,6 @@ export function HowItWorksPage(): JSX.Element {
         <p className="max-w-2xl text-muted">
           A buying agent calls once, just before it pays. Solv treats the service
           text as hostile, because the party being paid wrote it.
-        </p>
-        <p className="text-sm text-muted">
-          The gate is tried against 20 injection cases in the{" "}
-          <Link to="/attack-lab" className="text-accent-ink underline underline-offset-2">
-            Attack Lab
-          </Link>
-          .
         </p>
       </Block>
 
@@ -346,7 +339,7 @@ export function AttackLabPage(): JSX.Element {
       <Block id="categories" title="The six categories">
         <div className="grid gap-4 md:grid-cols-2">
           {ATTACK_CATEGORIES.map(([name, body]) => (
-            <div key={name} className="rounded-xl bg-surface p-5">
+            <div key={name} className="rounded-xl border border-border bg-surface p-5">
               <h3 className="font-semibold">{name}</h3>
               <p className="mt-1 text-sm text-muted">{body}</p>
             </div>

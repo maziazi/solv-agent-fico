@@ -6,15 +6,15 @@ import type { JSX } from "react";
 export type Decision = "APPROVE" | "HOLD" | "BLOCK";
 
 const DECISION_CLASS: Record<Decision, string> = {
-  APPROVE: "bg-approve-solid text-white",
-  HOLD: "bg-hold-solid text-ink",
-  BLOCK: "bg-block-solid text-white",
+  APPROVE: "bg-approve-bg text-approve-ink border-approve-ink",
+  HOLD: "bg-hold-bg text-hold-ink border-hold-ink",
+  BLOCK: "bg-block-bg text-block-ink border-block-ink",
 };
 
 export function DecisionBadge({ decision }: { decision: Decision }): JSX.Element {
   return (
     <span
-      className={`inline-block w-fit rounded-md px-2 py-0.5 font-head text-sm font-medium uppercase tracking-wider ${DECISION_CLASS[decision]}`}
+      className={`inline-block border px-2 py-0.5 font-head text-sm font-medium uppercase tracking-wider ${DECISION_CLASS[decision]}`}
     >
       {decision}
     </span>
@@ -28,8 +28,8 @@ export function DecisionBadge({ decision }: { decision: Decision }): JSX.Element
 // neutral, and their relative standing is carried by filled pips, which
 // survive greyscale and colour blindness (DESIGN §7).
 const BAND_CLASS: Record<string, string> = {
-  POOR: "bg-block-solid text-white",
-  UNRATED: "bg-hold-solid text-ink",
+  POOR: "bg-block-bg text-block-ink border-block-ink",
+  UNRATED: "bg-hold-bg text-hold-ink border-hold-ink",
 };
 
 /** Pips filled per band, out of four. POOR and UNRATED show none. */
@@ -41,11 +41,11 @@ const BAND_PIPS: Record<string, number> = {
 };
 
 export function TierBadge({ tier }: { tier: string }): JSX.Element {
-  const cls = BAND_CLASS[tier] ?? "bg-ink text-bg";
+  const cls = BAND_CLASS[tier] ?? "bg-surface text-ink border-muted";
   const pips = BAND_PIPS[tier] ?? 0;
   return (
     <span
-      className={`inline-flex w-fit items-center gap-1.5 rounded-md px-2 py-0.5 font-head text-xs font-medium uppercase tracking-wider ${cls}`}
+      className={`inline-flex items-center gap-1.5 border px-2 py-0.5 font-head text-xs font-medium uppercase tracking-wider ${cls}`}
     >
       {tier.replaceAll("_", "-")}
       {pips > 0 && (
@@ -53,7 +53,7 @@ export function TierBadge({ tier }: { tier: string }): JSX.Element {
           {[1, 2, 3, 4].map((pip) => (
             <span
               key={pip}
-              className={`inline-block h-2 w-1 ${pip <= pips ? "bg-bg" : "bg-muted"}`}
+              className={`inline-block h-2 w-1 ${pip <= pips ? "bg-ink" : "bg-border"}`}
             />
           ))}
         </span>
@@ -64,23 +64,23 @@ export function TierBadge({ tier }: { tier: string }): JSX.Element {
 
 export function EffectChip({ effect }: { effect: string }): JSX.Element {
   return (
-    <span className="inline-block rounded-md bg-bg px-1.5 py-px font-mono text-xs text-muted">
+    <span className="inline-block border border-border px-1.5 py-px font-mono text-xs text-muted">
       {effect}
     </span>
   );
 }
 
 const SEVERITY_CLASS: Record<string, string> = {
-  critical: "bg-block-solid text-white",
-  high: "bg-hold-solid text-ink",
-  medium: "bg-surface text-ink",
-  info: "bg-surface text-muted",
+  critical: "bg-block-bg text-block-ink border-block-ink",
+  high: "bg-hold-bg text-hold-ink border-hold-ink",
+  medium: "bg-surface text-ink border-muted",
+  info: "bg-surface text-muted border-border",
 };
 
 export function SeverityChip({ severity }: { severity: string }): JSX.Element {
-  const cls = SEVERITY_CLASS[severity] ?? "bg-surface text-muted";
+  const cls = SEVERITY_CLASS[severity] ?? "bg-surface text-muted border-border";
   return (
-    <span className={`inline-block rounded-md px-1.5 py-px font-mono text-xs ${cls}`}>
+    <span className={`inline-block border px-1.5 py-px font-mono text-xs ${cls}`}>
       {severity}
     </span>
   );
