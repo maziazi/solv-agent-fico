@@ -12,7 +12,9 @@ larger work. They are latin-subset variable woff2 files.
 | JetBrains Mono | 2020 The JetBrains Mono Project Authors (JetBrains) | SIL OFL 1.1 |
 
 Font files were subset to Latin by Google Fonts' pipeline and downloaded from
-`fonts.gstatic.com` on 2026-11-15. License texts: https://scripts.sil.org/OFL.
+`fonts.gstatic.com` on 2026-11-15. The full OFL 1.1 text ships with the fonts
+themselves: it is embedded as an asset and served at `/static/fonts/OFL-1.1.txt`
+(and lives in `frontend/public/fonts/OFL-1.1.txt`).
 
 Nothing else in this repository is third-party code. The frontend build
 toolchain (Vite, React, Tailwind) is a dev-time dependency only — none of it

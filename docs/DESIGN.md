@@ -158,6 +158,7 @@ receipts and each carrying a `docs/SPEC.md` §9 verification label:
 | Total fraud blocked (USD) | Sum of `amount_usd` over `BLOCK` receipts | MEASURED |
 | Median Tier 1 latency | p50 from stored receipts | MEASURED |
 | Cost per check | Computed from token counts and published prices | CITED |
+| Cost per check, until receipts record token counts | renders `—` with the word `no data`, labelled UNPROVEN — a cost figure without token counts would be a constant dressed up as a measurement | UNPROVEN |
 
 If a metric has no data yet it renders as `—` with the word `no data`. It never
 renders a placeholder number. A hero metric that is secretly a constant is the

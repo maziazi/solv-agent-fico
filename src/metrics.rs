@@ -90,10 +90,24 @@ pub fn compute(receipts: &[(ReceiptId, Receipt)]) -> Metrics {
 }
 
 /// `(escalated, total_ms)` from a stored response, or `None` when the receipt
-/// predates the receipt store or its latency fields are unreadable. A
+/// predates the receipt store, its latency fields are unreadable, or the
+/// gate failed closed on an unreachable Tier 1 (`SOLV-SYSTEM-003`). A system
+/// failure is not Tier-1 traffic: counting it in the reflex path's sample
+/// would put the service's outage profile inside its latency SLO. An
 /// unreadable sample is skipped, not read as zero.
 fn path_latency(receipt: &Receipt) -> Option<(bool, u64)> {
     let response = receipt.response.as_object()?;
+    let tier1_dead = response
+        .get("reasons")
+        .and_then(Value::as_array)
+        .is_some_and(|reasons| {
+            reasons
+                .iter()
+                .any(|reason| reason.get("code").and_then(Value::as_str) == Some("SOLV-SYSTEM-003"))
+        });
+    if tier1_dead {
+        return None;
+    }
     let total_ms = response.get("latency_ms")?.get("total")?.as_u64()?;
     let escalated = response
         .get("tier_used")
@@ -221,6 +235,36 @@ mod tests {
             Some(&1),
             "tier counted when present"
         );
+    }
+
+    #[test]
+    fn a_fail_closed_tier1_failure_is_not_tier1_traffic() {
+        // The reviewer's live probe: an unconfigured provider yields
+        // tier_used: ["clef-flash"] with a near-zero latency and SOLV-SYSTEM-003.
+        // That receipt must sample no path, or the reflex SLO absorbs outages.
+        let fail_closed = json!({
+            "tier": "UNRATED",
+            "tier_used": ["clef-flash"],
+            "reasons": [{ "code": "SOLV-SYSTEM-003", "severity": "critical" }],
+            "latency_ms": { "state": 0, "tier1": 0, "total": 1 }
+        });
+        let receipts = vec![
+            receipt("HOLD", 1.0, fail_closed),
+            receipt("APPROVE", 1.0, response("PRIME", false, 50)),
+        ];
+        let metrics = compute(&receipts);
+        assert_eq!(metrics.receipts_total, 2);
+        assert_eq!(
+            metrics.decisions.hold, 1,
+            "the failure still counts as a decision"
+        );
+        assert_eq!(
+            metrics.latency_ms.tier1_only_p50,
+            Some(50),
+            "only real reflex samples"
+        );
+        assert_eq!(metrics.latency_ms.tier1_only_p95, Some(50));
+        assert_eq!(metrics.latency_ms.escalated_p50, None);
     }
 
     #[test]

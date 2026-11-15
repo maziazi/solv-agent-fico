@@ -2,6 +2,12 @@
 // times from the receipt's latency_ms, skipped stages visible with their
 // reason. A skipped stage is never hidden — hiding it would misrepresent the
 // architecture, and the architecture is the pitch.
+//
+// Honesty rule (review finding): `tier_used` names the tiers that *ran*, not
+// the tiers that produced a verdict. Provider failure is carried by the
+// gate's SYSTEM reason codes — the only SYSTEM codes the policy gate emits
+// are SOLV-SYSTEM-002 (latency ceiling) and SOLV-SYSTEM-003 (no decision
+// layer reachable), so those two drive the ✓ / ✗ states here.
 
 import type { JSX } from "react";
 
@@ -28,18 +34,24 @@ function idleNodes(): Node[] {
 }
 
 function nodesFor(r: PreSpendCheckResponse): Node[] {
+  const hasReason = (code: string) => r.reasons.some((reason) => reason.code === code);
+  const tier1Dead = hasReason("SOLV-SYSTEM-003");
+  const ceilingHit = hasReason("SOLV-SYSTEM-002");
   const tier2Ran = r.tier_used.includes("serv-reasoning");
-  const systemReason = r.reasons.find((reason) => reason.code.startsWith("SOLV-SYSTEM"));
-  const tier1Down = systemReason !== undefined && !r.tier_used.includes("clef-flash");
+
+  const tier2Elapsed = r.latency_ms.tier2 ?? 0;
+  // The gate's own time is what the whole path spent minus what the tiers
+  // spent; deterministic arithmetic, not a new claim.
+  const gateMs = Math.max(0, r.latency_ms.total - r.latency_ms.tier1 - tier2Elapsed);
 
   const nodes: Node[] = [
     { name: "State lookup", state: "ok", elapsed: r.latency_ms.state },
-    tier1Down
+    tier1Dead
       ? {
           name: "Clef-flash · Tier 1",
           state: "unavailable",
           elapsed: r.latency_ms.tier1,
-          detail: "unavailable — the gate fails closed",
+          detail: "unreachable — held fail-closed (SOLV-SYSTEM-003)",
         }
       : {
           name: "Clef-flash · Tier 1",
@@ -48,19 +60,23 @@ function nodesFor(r: PreSpendCheckResponse): Node[] {
           detail: r.reasons.find((reason) => reason.evidence?.source === "clef_flash")?.code,
         },
     tier2Ran
-      ? {
-          name: "SERV Reasoning · Tier 2",
-          state: r.latency_ms.tier2 === undefined ? "unavailable" : "ok",
-          elapsed: r.latency_ms.tier2 ?? null,
-          detail:
-            r.latency_ms.tier2 === undefined
-              ? "attempted, no verdict — fail-closed"
-              : r.reasons.find((reason) =>
-                  ["serv_prompt_guard", "serv_reasoning"].includes(
-                    reason.evidence?.source ?? "",
-                  ),
-                )?.code,
-        }
+      ? ceilingHit
+        ? {
+            name: "SERV Reasoning · Tier 2",
+            state: "unavailable",
+            elapsed: r.latency_ms.tier2 ?? null,
+            detail: "attempted, out of budget — held fail-closed (SOLV-SYSTEM-002)",
+          }
+        : {
+            name: "SERV Reasoning · Tier 2",
+            state: "ok",
+            elapsed: r.latency_ms.tier2 ?? null,
+            detail: r.reasons.find((reason) =>
+              ["serv_prompt_guard", "serv_reasoning"].includes(
+                reason.evidence?.source ?? "",
+              ),
+            )?.code,
+          }
       : {
           name: "SERV Reasoning · Tier 2",
           state: "skipped",
@@ -70,8 +86,8 @@ function nodesFor(r: PreSpendCheckResponse): Node[] {
     {
       name: "Policy gate",
       state: "ok",
-      elapsed: r.latency_ms.total,
-      detail: `${r.decision} · cap ${r.max_safe_spend.toFixed(2)}`,
+      elapsed: gateMs,
+      detail: `${r.decision} · cap ${r.max_safe_spend.toFixed(2)} · total ${ms(r.latency_ms.total)}`,
     },
   ];
   return nodes;
@@ -149,9 +165,11 @@ export function Pipeline({
           <span className="font-mono text-sm tabular-nums">
             {ms(result.latency_ms.total)} total
           </span>
+          {/* Terracotta never carries body-size text (DESIGN §2.3): the link
+              uses the darkened accent fill, 6.01:1 on the surface. */}
           <a
             href={result.receipt_url}
-            className="ml-auto font-mono text-sm text-accent underline decoration-1 underline-offset-2"
+            className="ml-auto font-mono text-sm text-accent-fill underline decoration-accent decoration-1 underline-offset-2"
           >
             public trust receipt ↗
           </a>

@@ -88,11 +88,20 @@ export function DeskPage(): JSX.Element {
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [metrics, setMetrics] = useState<DirectoryMetrics | null>(null);
+  const [metricsFailed, setMetricsFailed] = useState(false);
 
   const loadMetrics = useCallback(() => {
     fetchDirectory()
-      .then((directory) => setMetrics(directory.metrics))
-      .catch(() => setMetrics(null)); // metrics are decorative-adjacent; the simulator still works
+      .then((directory) => {
+        setMetrics(directory.metrics);
+        setMetricsFailed(false);
+      })
+      // The strip is a read-only flourish: a failed fetch shows an honest
+      // "metrics unavailable" and the simulator keeps working.
+      .catch(() => {
+        setMetrics(null);
+        setMetricsFailed(true);
+      });
   }, []);
 
   useEffect(loadMetrics, [loadMetrics]);
@@ -114,17 +123,21 @@ export function DeskPage(): JSX.Element {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
-    const amount = Number.parseFloat(form.amount_usd);
+    const amountText = form.amount_usd.trim();
+    // Strict grammar before parsing: "12abc" is a typo, not a donation of 12.
+    const amountOk = /^\d+(\.\d{1,2})?$/.test(amountText);
+    const amount = amountOk ? Number.parseFloat(amountText) : Number.NaN;
     if (
       form.counterparty_name.trim() === "" ||
       form.target_url.trim() === "" ||
       form.service_description.trim() === "" ||
-      !Number.isFinite(amount) ||
+      !amountOk ||
       amount <= 0
     ) {
       setStatus({
         kind: "error",
-        message: "Fill every field; amount must be a positive number.",
+        message:
+          "Fill every field; amount must be a positive number with at most two decimals.",
       });
       return;
     }
@@ -163,7 +176,7 @@ export function DeskPage(): JSX.Element {
           label="Fraud blocked, cumulative"
           value={blocked}
           verification="MEASURED"
-          detail="sum over BLOCK receipts on this instance"
+          detail={metricsFailed ? "metrics unavailable" : "sum over BLOCK receipts on this instance"}
         />
         <MetricTile
           label="Tier-1 latency, median"
@@ -175,7 +188,7 @@ export function DeskPage(): JSX.Element {
           }
           unit="ms"
           verification="MEASURED"
-          detail="p50 over Tier-1-only receipts"
+          detail={metricsFailed ? "metrics unavailable" : "p50 over Tier-1-only receipts"}
         />
         <MetricTile
           label="Cost per check"
@@ -291,7 +304,11 @@ export function DeskPage(): JSX.Element {
         </section>
 
         {/* Right — the live pipeline and the decision it produced. */}
-        <div className="flex min-w-0 flex-col gap-6">
+        <div
+          className="flex min-w-0 flex-col gap-6"
+          role="status"
+          aria-live="polite"
+        >
           <Pipeline result={result} running={status.kind === "running"} />
 
           {result && (

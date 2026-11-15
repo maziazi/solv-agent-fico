@@ -75,6 +75,14 @@ pub const ASSETS: &[Asset] = &[
         cache: "public, max-age=604800",
         bytes: include_bytes!("../../frontend/dist/fonts/jetbrains-mono-var-latin.woff2"),
     },
+    // The fonts ride the SIL OFL 1.1; the license text ships next to them.
+    Asset {
+        path: "fonts/OFL-1.1.txt",
+        content_type: "text/plain; charset=utf-8",
+        csp: NO_EXTERNAL_FETCHES,
+        cache: "public, max-age=604800",
+        bytes: include_bytes!("../../frontend/public/fonts/OFL-1.1.txt"),
+    },
     Asset {
         path: "fonts/space-grotesk-var-latin.woff2",
         content_type: "font/woff2",
