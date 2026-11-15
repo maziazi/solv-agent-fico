@@ -182,6 +182,24 @@ fn evidence(source: Source, field: &str, detector_output: serde_json::Value) -> 
     }
 }
 
+/// Evidence for a reason that accuses the counterparty's text (SPEC §2.2.3):
+/// it carries the verbatim span and its char locator when the span finder
+/// can point at the attack. A detector verdict without a located span stays
+/// quote-free — an invented quote would be worse than none.
+fn attack_evidence(
+    source: Source,
+    field: &str,
+    detector_output: serde_json::Value,
+    description: &str,
+) -> Evidence {
+    let mut ev = evidence(source, field, detector_output);
+    if let Some(span) = crate::spans::injection_span(description) {
+        ev.locator = Some(span.locator());
+        ev.quote = Some(span.quote);
+    }
+    ev
+}
+
 /// Evaluates the SPEC §5.4 decision table in binding row order.
 ///
 /// Deviations from the written signature, both documented in the PR:
@@ -238,10 +256,11 @@ pub fn decide(
         if t2.outcome == Tier2Outcome::GuardRefusal {
             return block(
                 ReasonCode::Injection001,
-                evidence(
+                attack_evidence(
                     Source::ServPromptGuard,
                     "service_description",
                     serde_json::json!({ "refusal": true }),
+                    &request.service_description,
                 ),
             );
         }
@@ -255,10 +274,11 @@ pub fn decide(
     {
         return block(
             ReasonCode::Injection002,
-            evidence(
+            attack_evidence(
                 Source::ClefFlash,
                 "service_description",
                 serde_json::json!({ "probability_true": tier1.injection_probability_true }),
+                &request.service_description,
             ),
         );
     }
@@ -275,13 +295,14 @@ pub fn decide(
         if risky && confident {
             return block(
                 ReasonCode::Injection003,
-                evidence(
+                attack_evidence(
                     Source::ClefFlash,
                     "service_description",
                     serde_json::json!({
                         "risk_class": tier1.risk_class,
                         "confidence": tier1.risk_class_confidence,
                     }),
+                    &request.service_description,
                 ),
             );
         }
