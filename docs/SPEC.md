@@ -480,20 +480,34 @@ it as positive evidence of injection, not as a failed call: `BLOCK` with code
 - Base URL: `https://eval.reppo.xyz/api/v1`
 - Auth: header `Authorization: Bearer $REPPO_API_KEY`, key from the API Key
   section at `eval.reppo.xyz`
-- Starting quota: 1,000 credits = 10 evaluations. 100 credits per `SETTLED`
-  evaluation. `FAILED` evaluations are not charged.
-- Endpoints: `POST /agents/eval-requests/submit`,
-  `GET /agents/eval-requests/{evalId}`
+- Contract: the Eval Router (`https://eval.reppo.xyz/agents.md`), migrated
+  2026-11-15. The older `docs.reppo.ai` pages and the `/agents/eval-requests/*`
+  routes describe a retired contract: those routes now answer 404.
+- Sign-up quota: 22,000 credits. 440 credits per text evaluation, charged only
+  when it reaches `COMPLETED`; `FAILED` evaluations are not charged. Credits
+  are reserved while an evaluation is in flight. **[PROVEN]**: one live run
+  charged 440 (2026-11-15).
+- Endpoints: `POST /agents/evals` (body `taskType` + `input`),
+  `GET /agents/evals/{id}`. Statuses: `QUEUED`, `PROCESSING`, `COMPLETED`,
+  `FAILED`.
+- Latency: Reppo documents 30–90 seconds. The one live evaluation took about
+  270 seconds. **[UNPROVEN]** beyond that single sample.
 
-**Two hard constraints that dictate the architecture:**
+**What dictates the architecture:** a verdict takes minutes, not milliseconds,
+and the panel can disagree with itself. The consequence must be stated wherever
+Solv is described: **Reppo cannot be called from the hot path.** The API now
+allows several evaluations in flight, but the audit still runs as a single-slot
+queue worker inside the same binary, because credits are non-renewable and one
+at a time keeps spend and attribution simple.
 
-1. **`settlementMinutes` has a minimum of 10.** Allowed values: 10, 15, 30, 60,
-   120, 360, 720, 1440.
-2. **At most 1 `PENDING` evaluation per account.**
+**Low confidence is not a score.** The result carries `confidence`
+(`low`, `medium`, `high`). The live evaluation scored 0 with `confidence: low`:
+the evaluator holding all the economic weight scored 0 while two others scored
+50 at weight 0. Solv charges the credits (Reppo did), but a `low` result writes
+no score to the profile and distils no rule; the job ends `INCONCLUSIVE` and the
+counterparty keeps its earlier score, or stays unrated.
 
-The consequence is blunt, and must be stated wherever Solv is described:
-**Reppo cannot be called from the hot path, and cannot be parallelised.** The
-Reppo audit runs as a single-slot queue worker inside the same binary:
+The Reppo audit runs as a single-slot queue worker inside the same binary:
 
 ```
 POST /api/v1/audit-counterparty
@@ -503,23 +517,22 @@ POST /api/v1/audit-counterparty
 
 worker (tokio task, one slot):
   take the queue head
-  → POST submit { type, payload, criteria: [4 pillars], context, settlementMinutes: 10 }
-  → store evalId, status PENDING
-  → poll GET {evalId} with backoff, starting at settlementMinutes
-  → SETTLED → map the score (§4.2), update the profile, distil critiques → learned_rules
-  → FAILED  → log it, no charge, reschedule at most twice
+  → POST /agents/evals { taskType: "claim", input }
+  → store the id, status QUEUED / PROCESSING
+  → poll GET /agents/evals/{id} with backoff (30 s, doubling to 300 s)
+  → COMPLETED, confidence medium or high → map the score (§4.2), update the
+    profile, distil critiques → learned_rules
+  → COMPLETED, confidence low → charge the credits, write nothing (INCONCLUSIVE)
+  → FAILED → log it, no charge, reschedule at most twice
   → release the slot, take the next
 ```
 
-Payload limits that must be respected: `payload` ≤ 50 KB (required), `context`
-≤ 32 KB (optional), `criteria` 0–10 items of ≤ 2 KB each, 1 attachment per
-evaluation at ≤ 2 MB.
-
-Statuses: `PENDING`, `SETTLED`, `FAILED`, `DENIED` (reserved, not currently
-used).
+Payload limit that must be respected: `input` is bounded locally at
+`MAX_INPUT_BYTES`; Solv's own framing (that the text is untrusted) travels
+inside `input`, since the body has no separate context field.
 
 `POST /audit-counterparty` **never** returns a score. It returns a queue
-position. An endpoint that returned an instant score from an API that needs ten
+position. An endpoint that returned an instant score from an API that takes
 minutes would be lying.
 
 ### 5.4 The deterministic policy gate
@@ -918,10 +931,10 @@ Response `202 Accepted`:
 {
   "status": "QUEUED",
   "queue_position": 3,
-  "settlement_minutes": 10,
+  "expected_settlement_seconds": 300,
   "estimated_settle_at": "2026-11-15T04:12:00Z",
-  "credits_remaining": 700,
-  "note": "Reppo settles no faster than 10 minutes and accepts one pending evaluation at a time."
+  "credits_remaining": 21560,
+  "note": "Solv runs one audit at a time. Reppo documents a verdict within 30-90 seconds; the one live run measured about 4.5 minutes."
 }
 ```
 
