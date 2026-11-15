@@ -83,10 +83,36 @@ fn write_canonical(value: &Value, out: &mut String) {
     }
 }
 
+/// The shortest round-trip digits of `value` in `d.ddde±x` form, choosing
+/// among equally short candidates the way Python does.
+///
+/// Rust's shortest printer and Python's `repr` agree on the length, but when
+/// the exact value sits precisely halfway between two candidates of that
+/// length (`97280982573650.625`) Rust picks the upper one and Python the even
+/// one (`...62`). So: take the length from Rust, re-print the exact value at
+/// that length (Rust's fixed-precision printer rounds half to even), and keep
+/// it when it still round-trips. If it does not (an asymmetric rounding
+/// interval at a power of two), Rust's own shortest digits are the answer.
+fn python_digits(value: f64) -> String {
+    let shortest = format!("{value:e}");
+    let digit_count = shortest
+        .split_once('e')
+        .map_or(0, |(mantissa, _)| {
+            mantissa.chars().filter(char::is_ascii_digit).count()
+        })
+        .max(1);
+    let rounded = format!("{:.*e}", digit_count - 1, value);
+    if rounded.parse::<f64>() == Ok(value) {
+        rounded
+    } else {
+        shortest
+    }
+}
+
 /// Formats a finite float exactly as Python's `repr(float)` does, which is
 /// what the reference verifier prints.
 ///
-/// Digits are the shortest that round-trip (Rust's `{:e}`). With `exp10`
+/// Digits are the shortest that round-trip ([`python_digits`]). With `exp10`
 /// the decimal exponent of the leading digit: decimal notation when
 /// `-4 <= exp10 < 16`, with integral values keeping a trailing `.0`;
 /// otherwise scientific with a signed exponent of at least two digits
@@ -101,7 +127,7 @@ pub fn format_float(value: f64) -> String {
         }
         .to_string();
     }
-    let scientific = format!("{value:e}");
+    let scientific = python_digits(value);
     let (mantissa, exponent) = scientific
         .split_once('e')
         .expect("LowerExp always writes an exponent");

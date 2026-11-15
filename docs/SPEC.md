@@ -678,7 +678,9 @@ writes `1e+16`, so a JCS library will not reproduce this hash. Precisely:
   U+007F, stays raw
 - integers (JSON numbers with no fraction or exponent) print as written
 - floats print as Python's `repr(float)`: the shortest decimal digits that
-  round-trip, then, with `exp10` the decimal exponent of the leading digit,
+  round-trip (among equally short candidates the one closest to the exact
+  value, and when the exact value sits precisely halfway, the even last digit:
+  `97280982573650.625` is `97280982573650.62`), then, with `exp10` the decimal exponent of the leading digit,
   **decimal notation when `-4 <= exp10 < 16`** (`0.0001`, `50.0`,
   `1000000000000000.0`: an integral float keeps its `.0`), otherwise
   **scientific notation** `d[.ddd]e±XX` with a signed exponent of at least two

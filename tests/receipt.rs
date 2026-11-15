@@ -126,6 +126,10 @@ const PYTHON_FLOAT_FORMS: &[(&str, &str)] = &[
     ("5e-324", "5e-324"),
     ("1.7976931348623157e308", "1.7976931348623157e+308"),
     ("0.30000000000000004", "0.30000000000000004"),
+    // Exact ties between two shortest candidates (the value is exactly
+    // ...625): Python rounds half to even, Rust's shortest printer rounds up.
+    ("97280982573650.625", "97280982573650.62"),
+    ("-238802467511503.625", "-238802467511503.62"),
     ("-0.0", "-0.0"),
     ("50.0", "50.0"),
     ("14", "14"),
@@ -159,8 +163,33 @@ fn float_array_hash_matches_the_python_reference_vector() {
     assert_eq!(canonical_json(&value), expected_text);
     assert_eq!(
         evidence_sha256(&value),
-        "f3f13408e0076973bfca7bd6ee6e264dac896a6022410d516aea5935ce66014b"
+        "d29bb09864bcc1e71e7913948a61ba5aaec694836e28ae072c633ca7f3738186"
     );
+}
+
+/// Every power of two (normal and subnormal) and its two neighbours: the
+/// floats whose rounding interval is asymmetric, where the closest shortest
+/// candidate may not round-trip. One Python run over the whole set.
+#[test]
+fn powers_of_two_and_their_neighbours_print_as_python_does() {
+    let mut bits: Vec<u64> = (1u64..2047).map(|biased| biased << 52).collect();
+    bits.extend((0..52).map(|shift| 1u64 << shift));
+    let mut floats = Vec::new();
+    for power in bits {
+        floats.push(f64::from_bits(power));
+        floats.push(f64::from_bits(power + 1));
+        floats.push(f64::from_bits(power - 1));
+    }
+    let value = Value::Array(
+        floats
+            .iter()
+            .filter(|f| f.is_finite())
+            .flat_map(|f| [json!(f), json!(-f)])
+            .collect(),
+    );
+    let (text, digest) = reference_canonical(&value);
+    assert_eq!(canonical_json(&value), text);
+    assert_eq!(evidence_sha256(&value), digest);
 }
 
 /// Guards the constants above against drift: the live script and the
@@ -634,7 +663,9 @@ fn amount() -> impl Strategy<Value = f64> {
 }
 
 /// Any finite float: uniform over bit patterns (every exponent, subnormals,
-/// both zeros) and short decimal literals like the ones people send.
+/// both zeros), short decimal literals like the ones people send, and exact
+/// binary fractions `n / 2^k` — the values whose exact decimal expansion can
+/// sit precisely halfway between two shortest candidates.
 fn finite_float() -> impl Strategy<Value = f64> {
     prop_oneof![
         any::<u64>()
@@ -642,6 +673,10 @@ fn finite_float() -> impl Strategy<Value = f64> {
             .prop_filter("finite", |f| f.is_finite()),
         (any::<i32>(), -40i32..40).prop_map(|(mantissa, exponent)| {
             format!("{mantissa}e{exponent}").parse::<f64>().unwrap()
+        }),
+        (1u64..(1u64 << 53), 0u32..30, any::<bool>()).prop_map(|(n, k, negative)| {
+            let value = n as f64 / (1u64 << k) as f64;
+            if negative { -value } else { value }
         }),
     ]
 }
