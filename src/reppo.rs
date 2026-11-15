@@ -25,6 +25,8 @@ use serde_json::{Value, json};
 
 use crate::score::Pillars;
 
+/// Environment variable that must be `1` before the real client loads.
+pub const ENABLE_ENV: &str = "SOLV_REPPO_ENABLED";
 pub const DEFAULT_BASE_URL: &str = "https://eval.reppo.xyz/api/v1";
 /// Credits Reppo charges for one `SETTLED` evaluation (SPEC §5.3). A
 /// `FAILED` evaluation is not charged.
@@ -233,15 +235,26 @@ impl ReppoHttpClient {
         })
     }
 
-    /// Builds the client from `REPPO_API_KEY`. Returns `None` when it is
-    /// absent or blank — the caller decides whether that is fatal. The key
-    /// is never logged.
+    /// Builds the client from `REPPO_API_KEY`, but only when the operator
+    /// also set [`ENABLE_ENV`] to `1`. Reppo credits are non-renewable, so
+    /// a key left in `.env` must not by itself let the service spend them.
+    /// Returns `None` otherwise — the caller decides whether that is fatal.
+    /// The key is never logged.
     pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("REPPO_API_KEY").ok()?;
-        if api_key.trim().is_empty() {
+        Self::from_vars(
+            std::env::var("REPPO_API_KEY").ok().as_deref(),
+            std::env::var(ENABLE_ENV).ok().as_deref(),
+        )
+    }
+
+    /// [`ReppoHttpClient::from_env`] over explicit values, so the gate can
+    /// be tested without touching the process environment.
+    pub fn from_vars(api_key: Option<&str>, enabled: Option<&str>) -> Option<Self> {
+        if enabled != Some("1") {
             return None;
         }
-        Self::new(api_key, DEFAULT_TIMEOUT).ok()
+        let api_key = api_key.filter(|key| !key.trim().is_empty())?;
+        Self::new(api_key.to_string(), DEFAULT_TIMEOUT).ok()
     }
 }
 

@@ -271,6 +271,7 @@ Required environment variables (an `.env.example` ships with PR-01):
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard → AI → Workers AI; token needs Workers AI read/run |
 | `SERV_API_KEY` | [console.openserv.ai](https://console.openserv.ai) |
 | `REPPO_API_KEY` | [eval.reppo.xyz](https://eval.reppo.xyz) → API Key |
+| `SOLV_REPPO_ENABLED` | Set to `1` to let the Reppo client load. Without it a key in `.env` is ignored, because Reppo credits are non-renewable |
 | `PORT`, `STATE_FILE` | Optional; default `8080` and `solv_state.json` |
 
 Keys live only in a gitignored `.env` and in GitHub Actions Secrets. They never

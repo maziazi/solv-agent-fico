@@ -40,8 +40,8 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::reppo::{
-    CREDITS_PER_EVAL, EvalStatus, EvalSubmission, FREE_TIER_CREDITS, MAX_ERROR_CHARS, ReppoClient,
-    ReppoError, SettledEval, SubmissionError, sanitize_untrusted,
+    CREDITS_PER_EVAL, EvalStatus, EvalSubmission, MAX_ERROR_CHARS, ReppoClient, ReppoError,
+    SettledEval, SubmissionError, sanitize_untrusted,
 };
 use crate::score::SettledScore;
 use crate::state::{CounterpartyId, Profile, Store};
@@ -77,7 +77,10 @@ pub struct BureauConfig {
     /// evaluation this process does not know about, which can legitimately
     /// take a full settlement window to clear.
     pub max_busy_retries: u32,
-    /// Local credit counter's starting value.
+    /// Local credit counter's starting value. The default is 0: Reppo's
+    /// credits are non-renewable, so nothing is spent until an operator
+    /// budgets credits explicitly (AGENTS.md: never spend Reppo quota
+    /// without the owner's approval).
     pub starting_credits: u32,
     /// Jobs allowed to wait in the queue (the in-flight job is extra).
     pub queue_capacity: usize,
@@ -93,7 +96,7 @@ impl Default for BureauConfig {
             submit_retry_backoff: Duration::from_secs(60),
             max_reschedules: 2,
             max_busy_retries: 30,
-            starting_credits: FREE_TIER_CREDITS,
+            starting_credits: 0,
             queue_capacity: 64,
         }
     }
@@ -117,6 +120,8 @@ pub enum EnqueueError {
     EmptyField(&'static str),
     #[error("audit queue is full")]
     QueueFull,
+    #[error("an audit for this counterparty is already queued or running")]
+    AlreadyQueued,
     #[error("not enough Reppo credits: {remaining} remaining")]
     InsufficientCredits { remaining: u32 },
     #[error("audit request is not a valid Reppo submission: {0}")]
@@ -166,7 +171,8 @@ struct Job {
 #[derive(Default)]
 struct QueueState {
     jobs: VecDeque<Job>,
-    in_flight: bool,
+    /// The counterparty whose evaluation the worker holds at Reppo.
+    in_flight: Option<CounterpartyId>,
 }
 
 struct Shared {
@@ -258,7 +264,15 @@ impl Bureau {
             if queue.jobs.len() >= config.queue_capacity {
                 return Err(EnqueueError::QueueFull);
             }
-            let outstanding = queue.jobs.len() + usize::from(queue.in_flight);
+            if queue.in_flight.as_ref() == Some(&request.counterparty_id)
+                || queue
+                    .jobs
+                    .iter()
+                    .any(|job| job.request.counterparty_id == request.counterparty_id)
+            {
+                return Err(EnqueueError::AlreadyQueued);
+            }
+            let outstanding = queue.jobs.len() + usize::from(queue.in_flight.is_some());
             let credits = self.shared.credits.load(Ordering::Acquire);
             let needed = CREDITS_PER_EVAL.saturating_mul(outstanding as u32 + 1);
             if credits < needed {
@@ -306,7 +320,7 @@ impl Bureau {
 
     /// Whether the worker currently holds Reppo's one pending slot.
     pub fn is_busy(&self) -> bool {
-        self.shared.queue().in_flight
+        self.shared.queue().in_flight.is_some()
     }
 }
 
@@ -328,7 +342,7 @@ async fn run_worker(shared: Arc<Shared>, client: Arc<dyn ReppoClient>, store: Ar
             {
                 let mut queue = shared.queue();
                 if let Some(job) = queue.jobs.pop_front() {
-                    queue.in_flight = true;
+                    queue.in_flight = Some(job.request.counterparty_id.clone());
                     break job;
                 }
             }
@@ -362,7 +376,7 @@ async fn run_worker(shared: Arc<Shared>, client: Arc<dyn ReppoClient>, store: Ar
             }
         };
         shared.set_status(&job_id, final_status);
-        shared.queue().in_flight = false;
+        shared.queue().in_flight = None;
     }
 }
 

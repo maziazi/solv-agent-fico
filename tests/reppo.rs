@@ -14,8 +14,8 @@ use axum::routing::{get, post};
 use serde_json::{Value, json};
 use solv::bureau::{AuditRequest, Bureau, BureauConfig, JobStatus};
 use solv::reppo::{
-    ALLOWED_SETTLEMENT_MINUTES, EvalStatus, EvalSubmission, MAX_PAYLOAD_BYTES, PILLAR_CRITERIA,
-    ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
+    ALLOWED_SETTLEMENT_MINUTES, CREDITS_PER_EVAL, EvalStatus, EvalSubmission, MAX_PAYLOAD_BYTES,
+    PILLAR_CRITERIA, ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
     parse_status_response, sanitize_untrusted,
 };
 use solv::score::Pillars;
@@ -460,41 +460,93 @@ async fn an_unreadable_submit_body_is_logged_sanitized_so_the_eval_id_can_be_rec
     assert!(message.contains("ev_in_other_field"), "{message}");
 }
 
+#[test]
+fn the_client_only_loads_when_a_key_exists_and_the_operator_enabled_it() {
+    // A key sitting in `.env` must not by itself let the service spend
+    // non-renewable credits: the operator opts in with SOLV_REPPO_ENABLED=1.
+    assert!(ReppoHttpClient::from_vars(Some("a-key"), Some("1")).is_some());
+    for not_enabled in [
+        None,
+        Some(""),
+        Some("0"),
+        Some("true"),
+        Some("yes"),
+        Some(" 1"),
+    ] {
+        assert!(
+            ReppoHttpClient::from_vars(Some("a-key"), not_enabled).is_none(),
+            "enabled flag {not_enabled:?} must not enable Reppo"
+        );
+    }
+    for no_key in [None, Some(""), Some("   ")] {
+        assert!(
+            ReppoHttpClient::from_vars(no_key, Some("1")).is_none(),
+            "key {no_key:?} must not load"
+        );
+    }
+}
+
 /// Hits the real Reppo Evaluation API through the whole worker path:
 /// enqueue, submit, wait out the 10-minute window, poll to `SETTLED`, and
 /// confirm the profile gained a score. Never runs in `cargo test`.
 ///
 /// **This spends 100 of the 1,000 non-renewable free credits and takes at
-/// least ten minutes.** Run it only with the project owner's approval, with
-/// `REPPO_API_KEY` in a local `.env`:
+/// least ten minutes.** `#[ignore]` alone is not enough protection:
+/// AGENTS.md names `cargo test -- --ignored` as the general "run the network
+/// tests" command, and that must never burn Reppo quota by accident. So even
+/// when selected, the test does nothing unless `REPPO_LIVE_OK=1` is set in
+/// the real environment of that command (it is checked *before* `.env` is
+/// read, so a file cannot arm it permanently). Run it only with the project
+/// owner's approval, with `REPPO_API_KEY` in a local `.env`:
 ///
 /// ```sh
-/// cargo test --test reppo live_reppo -- --ignored --nocapture
+/// REPPO_LIVE_OK=1 cargo test --test reppo live_reppo -- --ignored --nocapture
 /// ```
 #[tokio::test]
-#[ignore = "spends 100 real Reppo credits (non-renewable) and takes 10+ minutes; needs REPPO_API_KEY and owner approval"]
+#[ignore = "spends 100 real Reppo credits (non-renewable) and takes 10+ minutes; also needs REPPO_LIVE_OK=1, REPPO_API_KEY and owner approval"]
 async fn live_reppo_evaluation_settles_and_updates_a_profile() {
+    if std::env::var("REPPO_LIVE_OK").as_deref() != Ok("1") {
+        eprintln!(
+            "SKIPPED live_reppo_evaluation_settles_and_updates_a_profile: this would spend 100 \
+             non-renewable Reppo credits. Set REPPO_LIVE_OK=1 for this command to run it \
+             (owner approval required)."
+        );
+        return;
+    }
     dotenvy::dotenv().ok();
-    let reppo = ReppoHttpClient::from_env().expect("REPPO_API_KEY must be set");
+    // Built directly, not through `from_env`: REPPO_LIVE_OK is this test's
+    // explicit opt-in, so it must not also require SOLV_REPPO_ENABLED.
+    let api_key = std::env::var("REPPO_API_KEY").expect("REPPO_API_KEY must be set");
+    let reppo = ReppoHttpClient::new(api_key, solv::reppo::DEFAULT_TIMEOUT).unwrap();
+
+    // Budget exactly one evaluation, and let the worker give up well before
+    // this test does so a stuck evaluation reports its own `evalId`.
+    let config = BureauConfig {
+        starting_credits: CREDITS_PER_EVAL,
+        max_overdue: Duration::from_secs(50 * 60),
+        ..BureauConfig::default()
+    };
+    let window = Duration::from_secs(u64::from(config.settlement_minutes) * 60);
+    let deadline =
+        std::time::Instant::now() + window + config.max_overdue + Duration::from_secs(300);
+
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("state.json")).unwrap();
     let (bureau, _worker) = Bureau::spawn(
         std::sync::Arc::new(reppo),
         std::sync::Arc::clone(&store),
-        BureauConfig::default(),
+        config,
     );
 
     let enqueued = bureau
         .enqueue(AuditRequest {
-            counterparty_id: "solv-live-test".to_string(),
+            counterparty_id: "Solv live test".to_string(),
             counterparty_name: "Solv live test".to_string(),
             target_url: "https://eval.reppo.xyz".to_string(),
             claim: "Evaluation API for AI agent outputs, scored by staked evaluators.".to_string(),
         })
         .expect("enqueue");
 
-    // Settlement takes at least ten minutes, usually a few more.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60 * 60);
     let status = loop {
         let status = bureau.job_status(&enqueued.job_id).expect("job known");
         if status.is_terminal() {
@@ -502,7 +554,7 @@ async fn live_reppo_evaluation_settles_and_updates_a_profile() {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "evaluation did not settle within an hour; last status {status:?}"
+            "worker did not reach a verdict in time; last status {status:?}"
         );
         tokio::time::sleep(Duration::from_secs(15)).await;
     };
@@ -511,7 +563,7 @@ async fn live_reppo_evaluation_settles_and_updates_a_profile() {
         matches!(status, JobStatus::Settled { .. }),
         "live evaluation did not settle: {status:?}"
     );
-    let profile = store.profile("solv-live-test").expect("profile written");
+    let profile = store.profile("Solv live test").expect("profile written");
     let score = profile.score.expect("profile carries a settled score");
     assert!((0.0..=100.0).contains(&score.reppo_score));
     assert!(!score.eval_id.is_empty());
