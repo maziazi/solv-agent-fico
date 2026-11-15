@@ -569,6 +569,36 @@ Two limits protect the speed axis:
   Operator approval. A model-generated rule that immediately blocks someone's
   money is not a risk worth taking.
 
+**As implemented (PR-10).** Distillation is deterministic, not a SERV call. The
+critique is Reppo's free text about a counterparty and is therefore untrusted,
+so it never becomes question text. Instead:
+
+- A fixed catalogue of topics (`src/rules.rs`: guaranteed refund, urgency
+  pressure, credential request, off-platform payment, unverifiable claim,
+  impersonated authority) holds the question wording, written by Solv. A
+  critique with `score ≤ 4` only *selects* a topic, by keyword count; one that
+  matches none produces no rule. The model never sees the critique.
+- One rule per topic. A second critique on a topic that already has a rule, in
+  any status, is dropped. A rule is born `shadow` with effect `forced_hold` and
+  threshold 0.85; an automatically born rule is never `forced_block`.
+- The critique survives only as a sanitised quote of at most 300 characters
+  (control and invisible characters removed) plus the `eval_id` and criterion,
+  stored on the rule so it can be contested.
+- Rule ids are `SOLV-RULE-<n>`, ascending. An active rule's question key is
+  `rule_<n>`; the reason code is `SOLV-RULE-<n>`.
+- Promotion and demotion are `Store::set_learned_rule_status`. There is no HTTP
+  endpoint yet, so operator approval is whoever holds the process; the
+  directory page (PR-13) is where rules become visible.
+- At most 8 active rules compile into one call, lowest id first. Ranking by
+  trigger frequency, as the list above describes, is not built: it needs
+  hot-path counters, and the shipped selection is by id.
+- The compiled set is rebuilt when rules change and handed to the hot path as
+  an `Arc`; a request pays a lock read and a clone, not a recompilation.
+
+A model-assisted distiller, which could cover critiques the catalogue misses,
+is a later step and would need the same containment: its output is also text
+derived from untrusted input.
+
 Honest about the limit: turning free-text critique into an executable rule is
 the most fragile part of this system. That is exactly why `shadow` status exists,
 why promotion is manual, and why every rule stores the critique quote it came
@@ -735,9 +765,17 @@ produce. Notes on the shape:
 - `policy_config` is the configuration in force for that decision: `caps`
   (`prime_usd`, `standard_usd`, `subprime_usd`), `block_floor`, `safety_floor`,
   `absolute_cap_usd`, `latency_ceiling_ms`.
-- `ruleset_version` is `1` until learned rules (PR-10) make it dynamic. (The
-  `14` in the §5.5 learned-rule example is illustrative, not a value any receipt
-  carries today.)
+- `ruleset_version` is `1` plus the number of changes to the set of active
+  learned rules since the store was created. Promoting or demoting a rule
+  moves it; adding a `shadow` rule does not, because nothing in force changed.
+  The count is persisted in the snapshot. (The `14` in the §5.5 learned-rule
+  example is illustrative.)
+- `rules_applied` lists the ids (`SOLV-RULE-014`) of the active learned rules
+  whose question the Tier 1 response answered, in ascending id order. A
+  `shadow` rule never appears, and the list is empty when Tier 1 returned
+  nothing. The rule's own answer is in `tier1.answers.rule_<n>`, so it is
+  sealed with the rest. A rule that fired also appears in `reasons[]` as
+  `SOLV-RULE-<n>`.
 
 **What the hash does not cover.** `evidence_sha256` seals the evidence document
 above and nothing else. Outside it: `receipt_id`, `receipt_url`, `created_at`,
@@ -913,6 +951,9 @@ labels. Without a label, the claim must not be written.
 | Attack Lab: zero `APPROVE` on the injection corpus | **UNPROVEN** | Becomes PROVEN once PR-14 merges |
 | Fail-closed: no path to `APPROVE` with all tiers down | **UNPROVEN** | Becomes PROVEN once the G1 test exists |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
+| A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |
+| Compiling learned rules adds no measurable hot-path latency | **UNPROVEN** | The compiled set is cached, but no benchmark has run with 8 rules |
+| The topic catalogue covers a useful share of real critiques | **UNPROVEN** | Only offline fixtures that imitate Reppo's response; no real critique has been distilled |
 | Every issued receipt survives a crash | **UNPROVEN** | Not true inside the 2-second snapshot window (§5.6); the snapshot cost at scale is unmeasured |
 | "40x cheaper inference" | **WITHDRAWN** | See §10.3. The correct figures are ~9x blended and ~128x per hot-path call. The 40x claim must not be used. |
 
@@ -986,7 +1027,9 @@ An honest list of what has no evidence behind it as of this writing.
 - The 90/10 escalation ratio. It is an assumption; the real distribution could
   differ sharply and would change all of §10's arithmetic.
 - The quality of distilling Reppo critiques into a `LearnedRule` (§5.5). This is
-  the most fragile part of the design.
+  the most fragile part of the design. PR-10 matches a fixed catalogue by
+  keyword, so its quality is coverage: how many real critiques find a topic.
+  No real critique has been run through it.
 - Whether `serv_prompt_guard` catches encoding-layered injection. The Attack Lab
   must test it (§8.3); it must not be assumed.
 - Reppo's credit price beyond the free tier. Unpublished, so the Verified Badge
