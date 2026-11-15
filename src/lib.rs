@@ -152,6 +152,7 @@ pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/v1/directory", get(directory))
+        .route("/api/v1/agent/{id}", get(api::agent_lookup))
         .route(
             "/api/v1/pre-spend-check",
             post(api::pre_spend_check).route_layer(middleware::from_fn_with_state(
