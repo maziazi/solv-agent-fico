@@ -20,3 +20,8 @@ export function score(value: number | null): string {
 export function shortHash(hash: string): string {
   return hash.length <= 20 ? hash : `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 }
+
+/** Address of a counterparty's detail view on the explorer. */
+export function detailPath(id: string): string {
+  return `/explorer?c=${encodeURIComponent(id)}`;
+}
