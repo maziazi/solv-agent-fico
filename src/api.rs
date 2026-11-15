@@ -32,6 +32,10 @@ use crate::tier2::{DEFAULT_MODEL, REASONING_EFFORT, ServAsk, ServError};
 /// 1,500 characters and this limit they escalate instead.
 const MAX_DESCRIPTION_BYTES: usize = 50 * 1024;
 
+/// `counterparty_name` and `target_url` over 2 KB are rejected outright:
+/// unlike the description they are stored verbatim in the receipt.
+const MAX_IDENTITY_BYTES: usize = 2 * 1024;
+
 /// Monotonic per-process receipt-id counter, paired with the clock so ids
 /// stay unique across restarts.
 static RECEIPT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -155,6 +159,22 @@ pub async fn pre_spend_check(
             })),
         )
             .into_response();
+    }
+    // Both land verbatim in the permanent public receipt, so they are bounded
+    // before any tier or the store sees them.
+    for (field, value) in [
+        ("counterparty_name", &request.counterparty_name),
+        ("target_url", &request.target_url),
+    ] {
+        if value.len() > MAX_IDENTITY_BYTES {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({
+                    "error": format!("{field} exceeds 2 KB and is rejected")
+                })),
+            )
+                .into_response();
+        }
     }
 
     let gate_request = PreSpendRequest {
