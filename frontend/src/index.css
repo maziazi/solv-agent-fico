@@ -90,6 +90,7 @@
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
   --color-accent-fill: var(--accent-fill);
+  --color-accent-soft: var(--accent-soft);
   --color-approve-ink: var(--approve-ink);
   --color-approve-solid: var(--approve-solid);
   --color-hold-ink: var(--hold-ink);

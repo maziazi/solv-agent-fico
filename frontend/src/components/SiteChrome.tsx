@@ -41,6 +41,9 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
 const PRIMARY_BUTTON =
   "rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-bg transition-opacity hover:opacity-90";
 
+const PRIMARY_BUTTON =
+  "rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-bg transition-opacity hover:opacity-90";
+
 export function SiteHeader(): JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Closing on activation rather than on a location effect: the click is the
