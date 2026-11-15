@@ -29,6 +29,32 @@ pub fn escape(text: &str) -> String {
     out
 }
 
+/// Escapes only the characters that can open markup or end a text node,
+/// and changes nothing else, so `textContent` of the result is the input
+/// byte for byte.
+///
+/// This is not a replacement for [`escape`]: it leaves bidi overrides and
+/// zero-width characters raw. It exists for the one place whose bytes must
+/// survive exactly — the canonical evidence a browser hashes — and is safe
+/// only because that text sits in a `hidden` element that nobody reads.
+/// Numeric character references would not be lossless: the HTML parser
+/// remaps `&#x80;`–`&#x9F;` to Windows-1252 characters.
+pub fn escape_exact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            '`' => out.push_str("&#96;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn is_invisible(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -91,6 +117,17 @@ mod tests {
     #[test]
     fn newline_tab_and_ordinary_unicode_are_untouched() {
         assert_eq!(escape("a\nb\tc é 日本 😀"), "a\nb\tc é 日本 😀");
+    }
+
+    #[test]
+    fn exact_escaping_changes_only_markup_characters() {
+        let hostile = "pay\u{202E}1000\u{202C}\u{200B}\u{FEFF}\u{2028}\u{0085} é 😀 [U+202E]";
+        assert_eq!(escape_exact(hostile), hostile, "no invisible is rewritten");
+        assert_eq!(
+            escape_exact(r#"<script>"a" & 'b' `c`</script>"#),
+            "&lt;script&gt;&quot;a&quot; &amp; &#39;b&#39; &#96;c&#96;&lt;/script&gt;"
+        );
+        assert_eq!(escape_exact("&lt;"), "&amp;lt;");
     }
 
     #[test]

@@ -48,6 +48,26 @@ async fn main() {
     });
     store.spawn_snapshot_worker().await;
 
+    // Opt-in demo seed (SPEC §5.6): fatal at startup if the file is bad, so
+    // a broken seed never shows up as a half-empty Explorer mid-demo.
+    if let Some(seed_path) = std::env::var("SOLV_SEED_FILE")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+    {
+        match store.seed_from_file(std::path::Path::new(&seed_path)) {
+            Ok(solv::state::SeedOutcome::Loaded(count)) => {
+                eprintln!("solv: seeded {count} profile(s) from {seed_path}");
+            }
+            Ok(solv::state::SeedOutcome::Skipped) => {
+                eprintln!("solv: state already has profiles; seed file {seed_path} ignored");
+            }
+            Err(error) => {
+                eprintln!("solv: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let tier1: std::sync::Arc<dyn ClefClient> = match CloudflareClefClient::from_env() {
         Some(client) => std::sync::Arc::new(client),
         None => {

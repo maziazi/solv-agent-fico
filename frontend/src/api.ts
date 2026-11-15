@@ -2,6 +2,7 @@
 // `pnpm dev` reaches the server through the Vite proxy (vite.config.ts).
 
 import type {
+  ReceiptResponse,
   DirectoryResponse,
   PreSpendCheckRequest,
   PreSpendCheckResponse,
@@ -44,4 +45,9 @@ export async function preSpendCheck(
 export async function fetchDirectory(): Promise<DirectoryResponse> {
   const response = await fetch("/api/v1/directory");
   return parse<DirectoryResponse>(response);
+}
+
+export async function fetchReceipt(id: string): Promise<ReceiptResponse> {
+  const response = await fetch(`/api/v1/receipt/${encodeURIComponent(id)}`);
+  return parse<ReceiptResponse>(response);
 }

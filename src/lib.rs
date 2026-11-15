@@ -141,6 +141,7 @@ pub fn build_router(state: AppState) -> Router {
     const SPA_ROUTES: &[&str] = &[
         "/",
         "/desk",
+        "/proof",
         "/explorer",
         "/bureau",
         "/how-it-works",
@@ -261,6 +262,35 @@ mod tests {
         let tier2: std::sync::Arc<dyn ServClient> =
             std::sync::Arc::new(tier2::MockServClient::default());
         (dir, AppState::new(store, tier1, tier2))
+    }
+
+    /// Every page the navbar links to must answer with the SPA shell, so a
+    /// deep link or a refresh never lands on a 404.
+    #[tokio::test]
+    async fn every_frontend_route_serves_the_spa_shell() {
+        let (_dir, state) = test_state();
+        let router = build_router(state);
+        for path in [
+            "/",
+            "/desk",
+            "/proof",
+            "/explorer",
+            "/bureau",
+            "/how-it-works",
+            "/docs",
+            "/pricing",
+            "/attack-lab",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let html = String::from_utf8_lossy(&body);
+            assert!(html.contains("/static/spa.js"), "{path} must be the shell");
+        }
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ import { SiteFooter, SiteHeader } from "./components/SiteChrome";
 import { DeskPage } from "./pages/DeskPage";
 import { ExplorerPage } from "./pages/ExplorerPage";
 import { LandingPage } from "./pages/LandingPage";
+import { ProofPage } from "./pages/ProofPage";
 import {
   AttackLabPage,
   DocsPage,
@@ -27,6 +28,7 @@ export function App(): JSX.Element {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/desk" element={<DeskPage />} />
+          <Route path="/proof" element={<ProofPage />} />
           <Route path="/explorer" element={<ExplorerPage />} />
           <Route path="/how-it-works" element={<HowItWorksPage />} />
           <Route path="/docs" element={<DocsPage />} />
@@ -44,7 +46,7 @@ export function App(): JSX.Element {
 
 function NotFound(): JSX.Element {
   return (
-    <div className="mx-auto max-w-[76rem] px-4 py-16 sm:px-6">
+    <div className="wrap py-16">
       <p className="font-head text-2xl font-bold">NOT FOUND</p>
       <p className="mt-2 max-w-xl text-muted">
         Nothing lives at this address. The desk is at{" "}
