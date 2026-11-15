@@ -1303,3 +1303,34 @@ fn a_keyword_split_by_an_invisible_character_is_still_found() {
         "a newline is a word break, not a deletion"
     );
 }
+
+#[test]
+fn three_of_six_topics_overlap_the_risk_class_question() {
+    // SPEC §1.3 documents which catalogue topics the standard `risk_class`
+    // question already covers (coercion, exfiltration, overclaim); the
+    // constant is the single source both the catalogue and §9.1's claim
+    // cite, and this test fails if either the constant or the catalogue
+    // drifts away from the documented three.
+    assert_eq!(
+        RuleTopic::ALL.len(),
+        6,
+        "the catalogue size is part of the printed claim"
+    );
+    let documented = [
+        RuleTopic::UrgencyPressure,
+        RuleTopic::CredentialRequest,
+        RuleTopic::UnverifiableClaim,
+    ];
+    for topic in solv::rules::TOPICS_OVERLAPPING_RISK_CLASS {
+        assert!(
+            documented.contains(&topic),
+            "{:?} is documented as overlapping (SPEC §1.3)",
+            topic
+        );
+    }
+    assert_eq!(
+        solv::rules::TOPICS_OVERLAPPING_RISK_CLASS.len(),
+        3,
+        "the overlap count is part of the printed claim"
+    );
+}

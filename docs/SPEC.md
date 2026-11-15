@@ -993,12 +993,12 @@ labels. Without a label, the claim must not be written.
 | Reppo: 10-minute minimum, 1 pending evaluation | **CITED** | Reppo API docs |
 | Solv Tier 1 path p95 ≤ 200 ms end to end | **UNPROVEN** | Needs `cargo bench` + a load run |
 | Blended cost under $0.0005 per check | **UNPROVEN** | The §10 arithmetic is sound, but unmeasured |
-| Attack Lab: zero `APPROVE` on the injection corpus | **UNPROVEN** | Becomes PROVEN once PR-14 merges |
-| Fail-closed: no path to `APPROVE` with all tiers down | **UNPROVEN** | Becomes PROVEN once the G1 test exists |
+| Attack Lab: zero `APPROVE` on the injection corpus | **PROVEN** | `the_corpus_never_approves_and_every_reason_holds` (`tests/attack.rs`): 20 cases across the six §8.3 categories, zero approvals, span honesty checked per case |
+| Fail-closed: no path to `APPROVE` with all tiers down | **PROVEN** | `all_detectors_down_hold_fail_closed_and_never_approve` (`tests/attack.rs`) drives a full request with both providers failing and asserts HOLD on `SOLV-SYSTEM-003` |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
 | A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |
 | Topic selection ignores negated and embedded keywords, and a tie makes no rule | **PROVEN** | `keywords_match_on_word_boundaries_not_inside_other_words`, `a_negated_keyword_does_not_select_its_topic`, `a_tie_between_topics_creates_no_rule_and_is_counted` in `tests/rules.rs`; the two-word negation window is a stated limit, pinned by `negation_reaches_only_two_words_back` |
-| Learned rules overlap the standard questions on three of six topics | **PROVEN** | By construction of the catalogue (§1.3); whether the overlap helps or only duplicates is **UNPROVEN** |
+| Learned rules overlap the standard questions on three of six topics | **PROVEN** | `three_of_six_topics_overlap_the_risk_class_question` (`tests/rules.rs`) pins the documented §1.3 set; whether the overlap helps or only duplicates is **UNPROVEN** |
 | Compiling learned rules adds no measurable hot-path latency | **UNPROVEN** | The compiled set is cached, but no benchmark has run with 8 rules |
 | The topic catalogue covers a useful share of real critiques | **UNPROVEN** | Only offline fixtures that imitate Reppo's response; no real critique has been distilled |
 | Every issued receipt survives a crash | **UNPROVEN** | Not true inside the 2-second snapshot window (§5.6); the snapshot cost at scale is unmeasured |
@@ -1077,8 +1077,12 @@ An honest list of what has no evidence behind it as of this writing.
   the most fragile part of the design. PR-10 matches a fixed catalogue by
   keyword, so its quality is coverage: how many real critiques find a topic.
   No real critique has been run through it.
-- Whether `serv_prompt_guard` catches encoding-layered injection. The Attack Lab
-  must test it (§8.3); it must not be assumed.
+- Encoding-layered injection. The Attack Lab now tests the layered defence at
+  mock level (§8.3): base64 and zero-width layerings the Tier-1 stand-in misses
+  are refused by the SERV-guard stand-in, and homoglyph layering is caught
+  after folding. What stays unproven is the live providers' behaviour on these
+  layerings — mocks stand in for the real detectors, so the live claim is only
+  as strong as the mocks are faithful.
 - Reppo's credit price beyond the free tier. Unpublished, so the Verified Badge
   unit economics cannot be closed.
 - Whether real demand exists. Four projects in a single hackathon attacked the

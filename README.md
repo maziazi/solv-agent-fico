@@ -5,11 +5,13 @@ before it pays a counterparty; Solv answers `APPROVE`, `HOLD`, or `BLOCK` inside
 the latency budget a payment path actually has, and always attaches reasons that
 trace back to evidence.
 
-> **Status: specification stage.** This repository currently contains the
-> specification, work plan, workflow, and design system. There is no
-> implementation yet. Every claim below carries a verification label — see
-> [Claim verification](#claim-verification). Nothing is labelled `PROVEN`,
-> because no test exists yet to prove it.
+> **Status: implemented.** The full sixteen-PR plan (docs/WORKFLOW.md §3)
+> merges with this PR: the deterministic gate, the two-tier hot path, receipts with
+> recomputable evidence hashes, the Reppo worker and learned rules, the three
+> web pages, the Attack Lab, and the deploy pipeline. Every claim below
+> carries a verification label — see [Claim verification](#claim-verification).
+> Two headline claims are now `PROVEN` (named tests in `tests/attack.rs`);
+> the latency and cost figures stay labelled honestly until they are measured.
 
 ---
 
@@ -75,10 +77,12 @@ Two consequences the comparables do not have:
    answer-length variance to make latency unpredictable.
 2. **Reppo critiques select learned rules that compile into reflex-layer
    questions.** A critique never becomes question text: it selects one
-   operator-promotable question from a fixed catalogue (**PROVEN** offline;
-   model-based distillation is not built). Once promoted, the question rides
-   the same Clef call, so it adds no extra network round-trip (**PROVEN**,
-   one call per request). The loop closes on the hot path after a manual
+   operator-promotable question from a fixed catalogue (**PROVEN** offline —
+   `tests/rules.rs` pins topic selection, quote bounds and the no-rule-on-tie
+   cases; model-based distillation is not built). Once promoted, the question
+   rides the same Clef call, so it adds no extra network round-trip
+   (**PROVEN** — `an_active_rule_rides_the_tier1_call_and_a_firing_rule_holds_with_its_code`
+   in `tests/rules.rs`). The loop closes on the hot path after a manual
    promotion, not automatically. Its latency cost with 8 rules and its value
    on real critiques are **UNPROVEN**.
 
@@ -210,8 +214,8 @@ Current status of the headline numbers:
 | Reppo: 10-minute minimum, 1 pending evaluation, 10 free evaluations | `CITED` |
 | Blended cost ≈ $0.00042 per check | `UNPROVEN` |
 | Tier 1 p95 ≤ 200 ms end to end | `UNPROVEN` |
-| Attack Lab: zero `APPROVE` on the injection corpus | `UNPROVEN` |
-| Fail-closed under total provider outage | `UNPROVEN` |
+| Attack Lab: zero `APPROVE` on the injection corpus | `PROVEN` — `the_corpus_never_approves_and_every_reason_holds` in `tests/attack.rs` fails if a corpus case is ever approved |
+| Fail-closed under total provider outage | `PROVEN` — `all_detectors_down_hold_fail_closed_and_never_approve` in `tests/attack.rs` |
 
 One claim was **withdrawn** during research: an earlier draft advertised "40x
 cheaper inference". It cannot be derived from any published price. The
@@ -235,19 +239,14 @@ rules.
 
 ## Roadmap
 
-| Milestone | Done when |
-| --- | --- |
-| M0 | Repo builds, CI green, `GET /healthz` answers |
-| M1 | State survives restart; interrupted writes leave no corrupt file |
-| M2 | Score mapping and policy gate pass unit tests, including fail-closed |
-| M3 | `pre-spend-check` returns a real decision from a real Clef-flash call |
-| M4 | Tier 2 escalation works; guard refusal maps to a reason code |
-| M5 | Every decision has a receipt with a recomputable evidence hash |
-| M6 | One real Reppo evaluation settles and updates a profile |
-| M7 | Three pages live: Underwriting Desk, Trust Receipt, Bureau Directory |
-| M8 | Attack Lab passes; benchmarks measured; every `UNPROVEN` claim resolved or deleted |
-
-Dates and the PRs behind each milestone are in [`docs/PLAN.md`](docs/PLAN.md).
+Milestones M0–M7 are merged (state, gate, both tiers, receipts, Reppo worker,
+learned rules, the three pages, the deploy pipeline), and M8's Attack Lab has
+merged and passed (PR-14). What remains of M8 is measured evidence: `cargo
+bench` p50/p95 and the load run for the latency and cost rows, and closing or
+explicitly keeping the other three UNPROVEN rows in SPEC §9.1 (compiled-rules
+latency, catalogue coverage, receipt crash survival). The milestone table,
+dates, and PRs behind each milestone live in
+[`docs/PLAN.md`](docs/PLAN.md).
 
 ## Development
 
