@@ -47,11 +47,13 @@ pub fn new_receipt_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let n = RECEIPT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    // The counter is kept to six hex digits so the id length is stable;
+    // wraparound alone cannot collide because the clock has moved on.
     format!(
-        "slv_{:010x}{:08x}{:04x}",
+        "slv_{:010x}{:08x}{:06x}",
         elapsed.as_secs(),
         elapsed.subsec_nanos(),
-        n & 0xffff
+        n % 0x100_0000
     )
 }
 
