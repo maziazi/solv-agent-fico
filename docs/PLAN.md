@@ -100,6 +100,13 @@ four of those ten during development; keep the rest for the demo.
 4. Reppo credit balance is recorded in `docs/PLAN.md` here when first checked, so
    consumption is traceable: **unverified at time of writing — check before M6.**
 
+## Reppo credit ledger
+
+| Date (UTC) | Event | Credits |
+| --- | --- | --- |
+| 2026-11-15 13:09 | Owner approved **one** evaluation for the M6 milestone; budgeted 100 credits (`SOLV_REPPO_STARTING_CREDITS=100`); audit `aud_000001` queued for counterparty `LedgerWorks Analytics` via `POST /audit-counterparty` | −100 reserved |
+| 2026-11-15 (M6 watcher end; clock time not recorded) | Watcher ran 28 minutes and ended with the evaluation **never settled**. Status polling returned 404 from the Reppo API, matching the earlier diagnosis of a contract/deployment mismatch. Solv charges only on settlement, so nothing was charged locally. Local read of `GET /api/v1/directory`: `credits_remaining: 100`, `counterparties: []`. Reppo's own balance was **not** checked and stays **UNPROVEN** | 0 charged locally; 100 still reserved |
+
 ## Rules
 
 - Work on a branch; merge to `main` only through a PR with CI green.

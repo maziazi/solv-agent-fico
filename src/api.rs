@@ -435,8 +435,7 @@ mod tests {
 
 /// The operator-facing note every 202 carries. It states the two hard
 /// constraints the queue cannot negotiate away (SPEC §5.3).
-const AUDIT_NOTE: &str =
-    "Reppo settles no faster than 10 minutes and accepts one pending evaluation at a time.";
+const AUDIT_NOTE: &str = "Solv runs one audit at a time; the Eval Router panel usually returns a verdict within 30-90 seconds.";
 
 #[derive(Debug, Deserialize)]
 pub struct AuditCounterpartyRequest {
@@ -485,7 +484,7 @@ pub async fn audit_counterparty(
                 "status": "QUEUED",
                 "job_id": enqueued.job_id,
                 "queue_position": enqueued.queue_position,
-                "settlement_minutes": enqueued.settlement_minutes,
+                "expected_settlement_seconds": bureau::EXPECTED_SETTLEMENT_SECONDS,
                 "estimated_settle_at": iso8601_utc(enqueued.estimated_settle_at_unix),
                 "credits_remaining": enqueued.credits_remaining,
                 "note": AUDIT_NOTE,

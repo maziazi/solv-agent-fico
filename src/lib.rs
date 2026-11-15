@@ -503,10 +503,15 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "QUEUED");
         assert_eq!(json["queue_position"], 1);
-        assert_eq!(json["settlement_minutes"], 10);
+        // The Eval Router panel usually answers inside 30–90 seconds; the
+        // endpoint publishes that expectation, not a settlement window.
+        assert_eq!(json["expected_settlement_seconds"], 90);
         assert!(json["estimated_settle_at"].as_str().is_some());
         assert_eq!(json["credits_remaining"], 500);
-        assert!(json["note"].as_str().unwrap().contains("10 minutes"));
+        assert!(
+            json["note"].as_str().unwrap().contains("30-90 seconds")
+                || json["note"].as_str().unwrap().contains("90 seconds")
+        );
     }
 
     #[tokio::test]

@@ -32,15 +32,13 @@ pub const ENABLE_ENV: &str = "SOLV_REPPO_ENABLED";
 pub const DEFAULT_BASE_URL: &str = "https://eval.reppo.xyz/api/v1";
 /// Credits Reppo charges for one `SETTLED` evaluation (SPEC §5.3). A
 /// `FAILED` evaluation is not charged.
-pub const CREDITS_PER_EVAL: u32 = 100;
+pub const CREDITS_PER_EVAL: u32 = 440;
 /// The free tier: 1,000 credits, ten evaluations, not renewable (SPEC §5.3).
-pub const FREE_TIER_CREDITS: u32 = 1_000;
-/// Reppo's allowed `settlementMinutes` values; the minimum is 10.
-pub const ALLOWED_SETTLEMENT_MINUTES: [u32; 8] = [10, 15, 30, 60, 120, 360, 720, 1440];
-/// `payload` must be non-empty and at most 50 KB (SPEC §5.3).
-pub const MAX_PAYLOAD_BYTES: usize = 50 * 1024;
-/// `context` is optional and at most 32 KB (SPEC §5.3).
-pub const MAX_CONTEXT_BYTES: usize = 32 * 1024;
+/// The Eval Router signup bonus (eval.reppo.xyz/agents.md: "New accounts
+/// start with 22,000 credits"). A text evaluation costs 440 of them.
+pub const FREE_TIER_CREDITS: u32 = 22_000;
+/// `input` must be non-empty and at most 50 KB (Eval Router docs).
+pub const MAX_INPUT_BYTES: usize = 50 * 1024;
 /// Off the hot path, so a generous call timeout; a hung call must still
 /// become an error rather than a stuck worker.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -56,79 +54,51 @@ pub const PILLAR_CRITERIA: [&str; 4] = [
     "How deep and consistent is this party's public evidence over time?",
 ];
 
-/// What Solv asks Reppo to judge. `payload` is built from untrusted
-/// counterparty text and is only ever data to the evaluators; `context`
-/// is fixed Solv-authored text.
+/// What Solv asks Reppo to judge, in the Eval Router's shape (the 2026-11-15
+/// API migration: the old eval-requests endpoints were removed — see §5.3's
+/// dated note). `input` is built from untrusted counterparty text and is
+/// only ever data to the evaluator panel; the fixed Solv context travels
+/// inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalSubmission {
-    payload: String,
-    context: Option<String>,
-    settlement_minutes: u32,
+    input: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SubmissionError {
-    #[error("payload is empty")]
-    EmptyPayload,
-    #[error("payload is {0} bytes; Reppo accepts at most {MAX_PAYLOAD_BYTES}")]
-    PayloadTooLarge(usize),
-    #[error("context is {0} bytes; Reppo accepts at most {MAX_CONTEXT_BYTES}")]
-    ContextTooLarge(usize),
-    #[error("settlementMinutes {0} is not one of 10, 15, 30, 60, 120, 360, 720, 1440")]
-    BadSettlementMinutes(u32),
+    #[error("input is empty")]
+    EmptyInput,
+    #[error("input is {0} bytes; Reppo accepts at most {MAX_INPUT_BYTES}")]
+    InputTooLarge(usize),
 }
+
+/// `taskType` sent with every Solv submission: the counterparty's claim is
+/// being fact-checked against its own text, which is what `claim` means.
+pub const TASK_TYPE: &str = "claim";
 
 impl EvalSubmission {
     /// Validates against Reppo's documented limits so a bad submission is
     /// refused locally instead of costing a round trip.
-    pub fn new(
-        payload: String,
-        context: Option<String>,
-        settlement_minutes: u32,
-    ) -> Result<Self, SubmissionError> {
-        if payload.is_empty() {
-            return Err(SubmissionError::EmptyPayload);
+    pub fn new(input: String) -> Result<Self, SubmissionError> {
+        if input.is_empty() {
+            return Err(SubmissionError::EmptyInput);
         }
-        if payload.len() > MAX_PAYLOAD_BYTES {
-            return Err(SubmissionError::PayloadTooLarge(payload.len()));
+        if input.len() > MAX_INPUT_BYTES {
+            return Err(SubmissionError::InputTooLarge(input.len()));
         }
-        if let Some(context) = &context {
-            if context.len() > MAX_CONTEXT_BYTES {
-                return Err(SubmissionError::ContextTooLarge(context.len()));
-            }
-        }
-        if !ALLOWED_SETTLEMENT_MINUTES.contains(&settlement_minutes) {
-            return Err(SubmissionError::BadSettlementMinutes(settlement_minutes));
-        }
-        Ok(Self {
-            payload,
-            context,
-            settlement_minutes,
-        })
+        Ok(Self { input })
     }
 
-    pub fn payload(&self) -> &str {
-        &self.payload
+    pub fn input(&self) -> &str {
+        &self.input
     }
 
-    pub fn settlement_minutes(&self) -> u32 {
-        self.settlement_minutes
-    }
-
-    /// The wire body of `POST /agents/eval-requests/submit`. The counterparty
-    /// is judged as an `artifact`: it is neither an answer to a question
-    /// nor a plan or an execution trace.
+    /// The wire body of `POST /agents/evals`.
     pub fn to_body(&self) -> Value {
-        let mut body = json!({
-            "type": "artifact",
-            "payload": self.payload,
-            "criteria": PILLAR_CRITERIA,
-            "settlementMinutes": self.settlement_minutes,
-        });
-        if let Some(context) = &self.context {
-            body["context"] = Value::from(context.as_str());
-        }
-        body
+        json!({
+            "taskType": TASK_TYPE,
+            "input": self.input,
+        })
     }
 }
 
@@ -163,10 +133,8 @@ pub struct SettledEval {
 pub enum EvalStatus {
     Pending,
     Settled(Box<SettledEval>),
-    /// Not charged; Reppo's `result.reason` when present.
+    /// Not charged; carries Reppo's error text when present.
     Failed(Option<String>),
-    /// Reserved by Reppo, not currently used.
-    Denied,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -197,7 +165,7 @@ pub enum ReppoError {
 /// [`ReppoHttpClient`].
 #[async_trait]
 pub trait ReppoClient: Send + Sync {
-    /// Submits an evaluation and returns its `evalId`. The evaluation is
+    /// Submits an evaluation and returns its `id`. The evaluation is
     /// `PENDING` from this point; this is the call that can spend credits.
     async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError>;
 
@@ -275,7 +243,7 @@ impl ReppoClient for ReppoHttpClient {
     async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
         let response = self
             .http
-            .post(format!("{}/agents/eval-requests/submit", self.base_url))
+            .post(format!("{}/agents/evals", self.base_url))
             .bearer_auth(&self.api_key)
             .json(&submission.to_body())
             .send()
@@ -306,7 +274,7 @@ impl ReppoClient for ReppoHttpClient {
         let response = self
             .http
             .get(format!(
-                "{}/agents/eval-requests/{}",
+                "{}/agents/evals/{}",
                 self.base_url,
                 encode_path_segment(eval_id)
             ))
@@ -417,15 +385,14 @@ fn encode_path_segment(segment: &str) -> String {
     encoded
 }
 
-/// Reads the `evalId` out of a `201 Created` submit response. The response
-/// also carries an internal `id` that the read endpoint does not accept,
-/// so only `evalId` is used.
+/// Reads the `id` out of a `201 Created` submit response (the Eval Router
+/// reads evaluations back by this `id`).
 pub fn parse_submit_response(body: &Value) -> Result<String, ReppoError> {
     let eval_id = body
-        .get("evalId")
+        .get("id")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| ReppoError::Parse("evalId missing".to_string()))?;
+        .ok_or_else(|| ReppoError::Parse("id missing".to_string()))?;
     // An id ends up in a URL, a log line, a status and a public receipt.
     // Sanitising it would produce a different id that no longer works, so a
     // malformed one is refused instead.
@@ -435,7 +402,7 @@ pub fn parse_submit_response(body: &Value) -> Result<String, ReppoError> {
             .any(|c| c.is_control() || is_invisible_format_char(c))
     {
         return Err(ReppoError::Parse(
-            "evalId is not a plain identifier".to_string(),
+            "id is not a plain identifier".to_string(),
         ));
     }
     Ok(eval_id.to_string())
@@ -454,42 +421,35 @@ pub fn parse_status_response(body: &Value) -> Result<EvalStatus, ReppoError> {
         .and_then(Value::as_str)
         .ok_or_else(|| ReppoError::Parse("status missing".to_string()))?;
     match status {
-        "PENDING" => Ok(EvalStatus::Pending),
-        "DENIED" => Ok(EvalStatus::Denied),
+        "QUEUED" | "PROCESSING" => Ok(EvalStatus::Pending),
         "FAILED" => Ok(EvalStatus::Failed(
-            body.get("result")
-                .and_then(|result| result.get("reason"))
+            body.get("error")
                 .and_then(Value::as_str)
                 .map(|reason| sanitize_untrusted(reason, MAX_UNTRUSTED_CHARS)),
         )),
-        "SETTLED" => parse_settled(body).map(|settled| EvalStatus::Settled(Box::new(settled))),
+        "COMPLETED" => parse_settled(body).map(|settled| EvalStatus::Settled(Box::new(settled))),
         other => Err(ReppoError::Parse(format!("unknown status {other:?}"))),
     }
 }
 
 fn parse_settled(body: &Value) -> Result<SettledEval, ReppoError> {
-    let result = body
-        .get("result")
-        .filter(|result| result.is_object())
-        .ok_or_else(|| ReppoError::Parse("result missing on a SETTLED evaluation".to_string()))?;
-
-    let reppo_score = result
-        .get("verdict")
-        .and_then(|verdict| verdict.get("score"))
+    let reppo_score = body
+        .get("score")
         .and_then(Value::as_f64)
-        .ok_or_else(|| ReppoError::Parse("result.verdict.score missing".to_string()))?;
+        .ok_or_else(|| ReppoError::Parse("score missing on a COMPLETED evaluation".to_string()))?;
     if !(0.0..=100.0).contains(&reppo_score) {
         // Also rejects NaN, which no range contains.
         return Err(ReppoError::Parse(format!(
-            "result.verdict.score {reppo_score} is outside 0-100"
+            "score {reppo_score} is outside 0-100"
         )));
     }
 
-    let verdicts = parse_verdicts(result)?;
-    let pillars = map_pillars(&verdicts)?;
+    let result = body.get("result").filter(|result| result.is_object());
+    let verdicts = scorecard(body, result);
+    let pillars = pillars_from_scorecard(&verdicts);
 
     let settled_at_unix = body
-        .get("settledAt")
+        .get("completedAt")
         .and_then(Value::as_str)
         .and_then(parse_rfc3339_unix);
     let credits_charged = body
@@ -497,9 +457,8 @@ fn parse_settled(body: &Value) -> Result<SettledEval, ReppoError> {
         .and_then(Value::as_u64)
         .map(|credits| credits.min(u64::from(u32::MAX)) as u32)
         .unwrap_or(CREDITS_PER_EVAL);
-    let route = result
-        .get("action")
-        .and_then(|action| action.get("route"))
+    let route = body
+        .get("route")
         .and_then(Value::as_str)
         .map(str::to_string);
 
@@ -513,86 +472,117 @@ fn parse_settled(body: &Value) -> Result<SettledEval, ReppoError> {
     })
 }
 
-fn parse_verdicts(result: &Value) -> Result<Vec<CriterionVerdict>, ReppoError> {
-    let entries = result
-        .get("verdicts")
+/// The scorecard Reppo picked for this submission, turned into the verdict
+/// list rule distillation (§5.5) consumes: one entry per scored dimension,
+/// normalised to the 0–10 scale the pillars use, with the panel's written
+/// reasoning as its critique (bounded like every piece of Reppo text).
+///
+/// Two response layouts are accepted, because the Eval Router's reference
+/// shows a rubric map while its scorecard section promises a written
+/// critique per dimension: a `result.scorecard` array
+/// (`[{dimension|criterion, score, critique}]`) wins when present, and a
+/// `result.rubric_scores` map (`{dimension: score}`) is the fallback, with
+/// `result.reason` as each entry's critique.
+fn scorecard(body: &Value, result: Option<&Value>) -> Vec<CriterionVerdict> {
+    let shared_reason = || {
+        body.get("result")
+            .and_then(|result| result.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    };
+    if let Some(entries) = result
+        .and_then(|result| result.get("scorecard"))
         .and_then(Value::as_array)
-        .ok_or_else(|| ReppoError::Parse("result.verdicts missing".to_string()))?;
-    entries
-        .iter()
-        .map(|entry| {
-            let score = entry
-                .get("score")
-                .and_then(Value::as_f64)
-                .filter(|score| (0.0..=10.0).contains(score))
-                .ok_or_else(|| {
-                    ReppoError::Parse("a verdicts[].score is missing or outside 0-10".to_string())
-                })?;
-            Ok(CriterionVerdict {
-                criterion: sanitize_untrusted(
-                    entry
-                        .get("criterion")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    MAX_UNTRUSTED_CHARS,
-                ),
-                score,
-                critique: sanitize_untrusted(
+    {
+        let parsed: Vec<CriterionVerdict> = entries
+            .iter()
+            .filter_map(|entry| {
+                let dimension = entry
+                    .get("dimension")
+                    .or_else(|| entry.get("criterion"))
+                    .and_then(Value::as_str)?;
+                let score = normalised_score(entry.get("score").unwrap_or(&Value::Null))?;
+                let critique = sanitize_untrusted(
                     entry
                         .get("critique")
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
                     MAX_CRITIQUE_CHARS,
-                ),
+                );
+                Some(CriterionVerdict {
+                    criterion: sanitize_untrusted(dimension, MAX_UNTRUSTED_CHARS),
+                    score,
+                    critique,
+                })
             })
-        })
-        .collect()
+            .collect();
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+    if let Some(dimensions) = result
+        .and_then(|result| result.get("rubric_scores"))
+        .and_then(Value::as_object)
+    {
+        let shared_reason = shared_reason();
+        return dimensions
+            .iter()
+            .filter_map(|(dimension, value)| {
+                let score = normalised_score(value)?;
+                Some(CriterionVerdict {
+                    criterion: sanitize_untrusted(dimension, MAX_UNTRUSTED_CHARS),
+                    score,
+                    critique: sanitize_untrusted(shared_reason, MAX_CRITIQUE_CHARS),
+                })
+            })
+            .collect();
+    }
+    Vec::new()
 }
 
-/// Maps the per-criterion verdicts back onto the four pillars.
-///
-/// Matched by the exact criterion text Solv sent. Position is only a last
-/// resort for a response that reworded *every* criterion yet still returned
-/// exactly four (the reference says verdicts "follow your criteria"). A
-/// partial match is refused: when some questions are recognised and others
-/// are not, completing the rest by position could give the Safety score to
-/// the wrong question, letting a hijack attempt through or blocking an
-/// honest party. Any other count cannot be attributed at all.
-///
-/// Fractional scores are floored, never rounded up: a Safety score of 3.5
-/// must not become 4 and slip past the `≤ 3` hard gate (SPEC §5.4). A
-/// conservative direction, and a no-op for the integers the reference
-/// documents.
-fn map_pillars(verdicts: &[CriterionVerdict]) -> Result<Pillars, ReppoError> {
-    let by_text: Vec<Option<&CriterionVerdict>> = PILLAR_CRITERIA
-        .iter()
-        .map(|criterion| verdicts.iter().find(|v| v.criterion == *criterion))
-        .collect();
-    let matched = by_text.iter().flatten().count();
-    let ordered: Vec<&CriterionVerdict> = if matched == PILLAR_CRITERIA.len() {
-        by_text.into_iter().flatten().collect()
-    } else if matched == 0 && verdicts.len() == PILLAR_CRITERIA.len() {
-        verdicts.iter().collect()
-    } else if matched > 0 {
-        return Err(ReppoError::Parse(format!(
-            "only {matched} of {} pillar criteria were recognised; \
-             refusing to guess the rest by position",
-            PILLAR_CRITERIA.len()
-        )));
-    } else {
-        return Err(ReppoError::Parse(format!(
-            "expected {} pillar verdicts, got {}",
-            PILLAR_CRITERIA.len(),
-            verdicts.len()
-        )));
+/// The scorecard is documented as 0–10 per dimension; values that read as
+/// 0–100 are floored onto the 0–10 scale.
+fn normalised_score(value: &Value) -> Option<f64> {
+    let score = value.as_f64()?;
+    if !(0.0..=100.0).contains(&score) || score.is_nan() {
+        return None;
+    }
+    Some(if score > 10.0 { score / 10.0 } else { score })
+}
+
+/// Maps the scorecard dimensions onto the four pillars by keyword. The Eval
+/// Router picks its own dimensions, so this is best effort by design: a
+/// pillar no dimension covers defaults to 5 — the middle of the scale, not
+/// a guessed endorsement — and anything that does match is floored, never
+/// rounded up (the Safety gate must not be passed by rounding, SPEC §5.4).
+fn pillars_from_scorecard(verdicts: &[CriterionVerdict]) -> Pillars {
+    let matched = |keywords: &[&str]| -> Option<u8> {
+        verdicts
+            .iter()
+            .find(|verdict| {
+                let dimension = verdict.criterion.to_ascii_lowercase();
+                keywords.iter().any(|k| dimension.contains(k))
+            })
+            .map(|verdict| verdict.score.floor() as u8)
     };
-    let pillar = |index: usize| ordered[index].score.floor() as u8;
-    Ok(Pillars {
-        reliability: pillar(0),
-        track_record: pillar(1),
-        safety: pillar(2),
-        maturity: pillar(3),
-    })
+    let default = 5u8;
+    Pillars {
+        reliability: matched(&["reliab", "liveness", "uptime", "availability", "consisten"])
+            .unwrap_or(default),
+        track_record: matched(&[
+            "track",
+            "history",
+            "accuracy",
+            "factuality",
+            "evidence",
+            "verif",
+        ])
+        .unwrap_or(default),
+        safety: matched(&["safety", "security", "injection", "harm", "manipulat"])
+            .unwrap_or(default),
+        maturity: matched(&["maturity", "completeness", "depth", "specificity", "detail"])
+            .unwrap_or(default),
+    }
 }
 
 /// Parses an RFC 3339 timestamp (`2026-10-14T17:18:42.000Z`, or with a
@@ -795,7 +785,7 @@ impl ReppoClient for MockReppoClient {
         });
         state
             .submitted_payloads
-            .push(submission.payload().to_string());
+            .push(submission.input().to_string());
         state.pending = Some((eval_id.clone(), outcome, self.polls_before_resolve));
         Ok(eval_id)
     }

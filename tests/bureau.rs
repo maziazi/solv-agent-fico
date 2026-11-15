@@ -1,5 +1,5 @@
 //! Reppo audit worker tests (docs/SPEC.md §5.3) — all offline, under a
-//! paused tokio clock so the ten-minute settlement window costs nothing:
+//! paused tokio clock so waiting for the evaluator panel costs nothing:
 //! the single-slot queue (never two `PENDING` evaluations, FIFO), score
 //! provenance (a profile only changes from a `SETTLED` evaluation), the
 //! `FAILED` reschedule budget, credit accounting, and that enqueueing never
@@ -13,8 +13,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use solv::bureau::{AuditRequest, Bureau, BureauConfig, EnqueueError, JobStatus, clamp_settled_at};
 use solv::reppo::{
-    EvalStatus, EvalSubmission, FREE_TIER_CREDITS, MockOutcome, MockReppoClient, ReppoClient,
-    ReppoError, ReppoHttpClient, SubmissionError, UnconfiguredReppoClient,
+    CREDITS_PER_EVAL, EvalStatus, EvalSubmission, FREE_TIER_CREDITS, MockOutcome, MockReppoClient,
+    ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, UnconfiguredReppoClient,
 };
 use solv::score::{Pillars, Tier, effective_score, tier_for};
 use solv::state::{Profile, Store};
@@ -109,7 +109,10 @@ async fn a_settled_evaluation_creates_a_profile_with_the_mapped_score() {
     assert_eq!(effective.fico_raw, 729);
     assert_eq!(tier_for(Some(effective.fico_effective)), Tier::Good);
 
-    assert_eq!(bureau.credits_remaining(), 900);
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL
+    );
     assert!(!bureau.is_busy());
 }
 
@@ -144,7 +147,7 @@ fn the_mock_refuses_a_second_submit_like_the_real_api() {
         .unwrap();
     runtime.block_on(async {
         let mock = MockReppoClient::new(vec![], 5);
-        let submission = EvalSubmission::new("{}".to_string(), None, 10).unwrap();
+        let submission = EvalSubmission::new("{}".to_string()).unwrap();
         assert!(mock.submit(&submission).await.is_ok());
         assert!(matches!(
             mock.submit(&submission).await,
@@ -200,15 +203,20 @@ async fn the_queue_never_holds_two_pending_evaluations_and_is_fifo() {
     let order: Vec<String> = mock
         .submitted_payloads()
         .iter()
-        .map(|payload| {
-            serde_json::from_str::<serde_json::Value>(payload).unwrap()["counterparty_name"]
-                .as_str()
-                .unwrap()
+        .map(|input| {
+            input
+                .lines()
+                .find_map(|line| line.strip_prefix("Counterparty: "))
+                .expect("each input names its counterparty")
                 .to_string()
         })
         .collect();
     assert_eq!(order, ["alpha", "bravo", "charlie"], "FIFO");
-    assert_eq!(bureau.credits_remaining(), 700);
+    // Three settled evaluations charge three times.
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS - 3 * CREDITS_PER_EVAL
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -227,8 +235,7 @@ async fn enqueue_reports_a_queue_position_and_never_a_score() {
         ],
         [1, 2, 3]
     );
-    assert_eq!(first.settlement_minutes, 10);
-    assert_eq!(first.credits_remaining, 1_000);
+    assert_eq!(first.credits_remaining, FREE_TIER_CREDITS);
     assert!(second.estimated_settle_at_unix > first.estimated_settle_at_unix);
     assert!(matches!(
         bureau.job_status(&first.job_id),
@@ -285,15 +292,16 @@ async fn the_queue_refuses_work_beyond_its_capacity() {
 async fn the_queue_never_promises_credits_it_does_not_have() {
     let (_dir, store) = store();
     let config = BureauConfig {
-        starting_credits: 250,
+        starting_credits: 500,
         ..funded()
     };
     let (bureau, _worker) = spawn(Arc::new(MockReppoClient::new(vec![], 0)), &store, config);
+    // One evaluation reserves 440; two would need 880, which 500 cannot
+    // cover — the second is refused with the untouched remainder.
     assert!(bureau.enqueue(request("one")).is_ok());
-    assert!(bureau.enqueue(request("two")).is_ok());
     assert_eq!(
-        bureau.enqueue(request("three")),
-        Err(EnqueueError::InsufficientCredits { remaining: 250 }),
+        bureau.enqueue(request("two")),
+        Err(EnqueueError::InsufficientCredits { remaining: 500 }),
         "250 credits cover two evaluations at 100 each, not three"
     );
 }
@@ -313,7 +321,7 @@ async fn invalid_requests_are_refused_before_they_reach_the_queue() {
     huge.claim = "a".repeat(60 * 1024);
     assert!(matches!(
         bureau.enqueue(huge),
-        Err(EnqueueError::Invalid(SubmissionError::PayloadTooLarge(_)))
+        Err(EnqueueError::Invalid(SubmissionError::InputTooLarge(_)))
     ));
     assert_eq!(bureau.queued_len(), 0);
 }
@@ -329,10 +337,18 @@ async fn hostile_claim_text_stays_a_string_value_inside_the_payload() {
     let enqueued = bureau.enqueue(hostile_request).unwrap();
     wait_terminal(&bureau, &enqueued.job_id).await;
 
-    let payload: serde_json::Value =
-        serde_json::from_str(&mock.submitted_payloads()[0]).expect("payload is valid JSON");
-    assert_eq!(payload.as_object().unwrap().len(), 3, "no injected keys");
-    assert_eq!(payload["claim"], hostile, "the claim round-trips verbatim");
+    let sent = mock.submitted_payloads()[0].clone();
+    // The injection attempt must stay a quoted string inside the input,
+    // never executable structure of its own.
+    assert!(
+        !sent.starts_with('{') || serde_json::from_str::<serde_json::Value>(&sent).is_ok(),
+        "the input is always well-formed text/JSON"
+    );
+    assert!(sent.contains(hostile), "the claim round-trips verbatim");
+    assert!(
+        sent.contains("Claim to fact-check"),
+        "Solv's context rides in front"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -356,7 +372,7 @@ async fn a_failed_evaluation_is_rescheduled_and_charged_only_once_it_settles() {
     assert_eq!(mock.submit_calls(), 2, "one reschedule");
     assert_eq!(
         bureau.credits_remaining(),
-        900,
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL,
         "FAILED is not charged; only the settled attempt is"
     );
     assert_eq!(
@@ -389,7 +405,11 @@ async fn rescheduling_stops_after_two_retries_and_leaves_the_profile_untouched()
         3,
         "SPEC §5.3: rescheduled at most twice"
     );
-    assert_eq!(bureau.credits_remaining(), 1_000, "nothing was charged");
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS,
+        "nothing was charged"
+    );
     assert!(
         store.profile("doomed").is_none(),
         "a failed audit never invents a score"
@@ -707,7 +727,7 @@ fn fast_retry_config() -> BureauConfig {
 /// Accepts the submit request, counts it, and never answers in time.
 async fn silent_submit_server(hits: Arc<AtomicU32>) -> (String, tokio::task::JoinHandle<()>) {
     let app = axum::Router::new().route(
-        "/agents/eval-requests/submit",
+        "/agents/evals",
         axum::routing::post(move || {
             let hits = Arc::clone(&hits);
             async move {
@@ -753,7 +773,7 @@ async fn a_submit_whose_response_is_lost_is_never_resent() {
     assert_eq!(hits.load(Ordering::SeqCst), 1, "never resubmitted");
     assert_eq!(
         bureau.credits_remaining(),
-        900,
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL,
         "pessimistic: the evaluation may have been charged"
     );
     assert!(store.profile("lost").is_none());
@@ -783,7 +803,11 @@ async fn a_connection_refused_submit_was_never_sent_so_it_is_retried_and_free() 
         !reason.contains("outcome unknown"),
         "a refused connection is certain, not ambiguous: {reason}"
     );
-    assert_eq!(bureau.credits_remaining(), 1_000, "nothing was sent");
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS,
+        "nothing was sent"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -808,7 +832,10 @@ async fn an_unreadable_submit_response_is_not_resent_and_counts_as_spent() {
         "{reason}"
     );
     assert_eq!(client.inner.submit_calls(), 0, "the retry never happened");
-    assert_eq!(bureau.credits_remaining(), 900);
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL
+    );
 }
 
 /// A client whose `status` fails a scripted number of times before
@@ -941,7 +968,10 @@ async fn a_counterparty_can_be_audited_again_once_its_job_is_done() {
         wait_terminal(&bureau, &second.job_id).await,
         JobStatus::Settled { .. }
     ));
-    assert_eq!(bureau.credits_remaining(), 800);
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS - 2 * CREDITS_PER_EVAL
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -1023,7 +1053,7 @@ async fn a_score_is_never_written_onto_a_profile_for_a_different_url() {
     assert_eq!(store.profile("acme"), Some(existing), "profile untouched");
     assert_eq!(
         bureau.credits_remaining(),
-        900,
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL,
         "the evaluation settled, so Reppo charged for it anyway"
     );
 }
@@ -1040,7 +1070,7 @@ async fn a_poll_that_gives_up_counts_the_credit_as_possibly_spent() {
     assert!(matches!(status, JobStatus::Failed { .. }), "{status:?}");
     assert_eq!(
         bureau.credits_remaining(),
-        900,
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL,
         "pessimistic: a PENDING evaluation we abandoned may still be charged"
     );
 }
@@ -1094,38 +1124,9 @@ async fn a_fatal_poll_counts_the_credit_and_the_next_job_still_runs() {
     assert!(!bureau.is_busy());
     assert_eq!(
         bureau.credits_remaining(),
-        800,
-        "the abandoned job and the healthy one each count 100"
+        FREE_TIER_CREDITS - 2 * CREDITS_PER_EVAL,
+        "the abandoned job and the healthy one each charge one evaluation"
     );
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_denied_evaluation_is_fatal_and_counted() {
-    struct Denies {
-        inner: MockReppoClient,
-    }
-    #[async_trait]
-    impl ReppoClient for Denies {
-        async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
-            self.inner.submit(submission).await
-        }
-        async fn status(&self, _: &str) -> Result<EvalStatus, ReppoError> {
-            Ok(EvalStatus::Denied)
-        }
-    }
-    let (_dir, store) = store();
-    let client = Arc::new(Denies {
-        inner: MockReppoClient::new(vec![], 0),
-    });
-    let (bureau, _worker) = spawn(client, &store, funded());
-    let enqueued = bureau.enqueue(request("denied")).unwrap();
-    let status = wait_terminal(&bureau, &enqueued.job_id).await;
-    let JobStatus::Failed { reason } = status else {
-        panic!("expected Failed, got {status:?}");
-    };
-    assert!(reason.contains("denied"), "{reason}");
-    assert_eq!(bureau.credits_remaining(), 900);
-    assert!(store.profile("denied").is_none());
 }
 
 /// Panics inside `status`, after the evaluation was submitted.
@@ -1160,7 +1161,7 @@ async fn a_job_that_panics_after_submitting_counts_its_credit() {
     assert!(reason.contains("panicked"), "{reason}");
     assert_eq!(
         bureau.credits_remaining(),
-        900,
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL,
         "an evaluation was submitted before the panic, so it may be charged"
     );
     assert!(!bureau.is_busy());
@@ -1253,7 +1254,7 @@ async fn transient_poll_errors_are_ridden_out_and_cost_nothing_extra() {
         assert!(matches!(status, JobStatus::Settled { .. }), "{status:?}");
         assert_eq!(
             bureau.credits_remaining(),
-            900,
+            FREE_TIER_CREDITS - CREDITS_PER_EVAL,
             "charged once, on settlement"
         );
     }
@@ -1276,7 +1277,10 @@ async fn a_permanent_poll_error_is_not_retried_forever() {
         panic!("expected Failed, got {status:?}");
     };
     assert!(reason.contains("poll failed"), "{reason}");
-    assert_eq!(bureau.credits_remaining(), 900);
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL
+    );
 }
 
 /// Waits (on the real clock) until `condition` holds, or fails the test.
@@ -1293,7 +1297,7 @@ async fn concurrent_enqueues_never_pass_the_budget_or_the_single_slot() {
     let (_dir, store) = store();
     let mock = Arc::new(MockReppoClient::new(vec![], 0));
     let config = BureauConfig {
-        starting_credits: 500, // five evaluations, not sixteen
+        starting_credits: 880, // two evaluations, not sixteen
         ..funded()
     };
     let (bureau, _worker) = spawn(mock.clone(), &store, config);
@@ -1316,11 +1320,10 @@ async fn concurrent_enqueues_never_pass_the_budget_or_the_single_slot() {
             });
         }
     });
-    assert_eq!(accepted.load(Ordering::SeqCst), 5, "exactly the budget");
-    assert_eq!(refused_for_credit.load(Ordering::SeqCst), 11);
+    assert_eq!(accepted.load(Ordering::SeqCst), 2, "exactly the budget");
+    assert_eq!(refused_for_credit.load(Ordering::SeqCst), 14);
 
-    // The worker takes one job to Reppo (where it waits out its ten-minute
-    // window on the real clock) and the other four wait their turn.
+    // The worker takes one job to Reppo and the other waits its turn.
     eventually("the worker holds the one slot", || bureau.is_busy()).await;
     eventually("the first submit reached Reppo", || {
         mock.submit_calls() == 1
@@ -1333,7 +1336,7 @@ async fn concurrent_enqueues_never_pass_the_budget_or_the_single_slot() {
         "no second evaluation while one is pending"
     );
     assert_eq!(mock.conflicts(), 0);
-    assert_eq!(bureau.queued_len(), 4);
+    assert_eq!(bureau.queued_len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

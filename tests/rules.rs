@@ -15,8 +15,8 @@ use serde_json::{Map, Value, json};
 use solv::bureau::{AuditRequest, Bureau, BureauConfig, JobStatus};
 use solv::policy::RuleEffect;
 use solv::reppo::{
-    CriterionVerdict, EvalStatus, EvalSubmission, FREE_TIER_CREDITS, PILLAR_CRITERIA, ReppoClient,
-    ReppoError, parse_status_response,
+    CREDITS_PER_EVAL, CriterionVerdict, EvalStatus, EvalSubmission, FREE_TIER_CREDITS,
+    PILLAR_CRITERIA, ReppoClient, ReppoError, parse_status_response,
 };
 use solv::rules::{
     AddRule, DEFAULT_THRESHOLD, MAX_ACTIVE_RULES_PER_CALL, MAX_QUOTE_CHARS, RuleTopic, distil,
@@ -34,27 +34,33 @@ const DAY: u64 = 86_400;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/// A `SETTLED` Reppo body, in the documented shape, with one critique per
-/// pillar. Parsed through the real parser so the rules see what the worker
-/// sees.
+/// The fixture: pillar scores with the given critiques, built directly as
+/// the worker would produce them from a COMPLETED evaluation's scorecard
+/// (rubric_to_verdicts maps each dimension onto one entry whose critique is
+/// the panel's written reasoning).
 fn settled_body(verdicts: [(f64, &str); 4]) -> Value {
-    let verdicts: Vec<Value> = PILLAR_CRITERIA
+    let scorecard: Vec<Value> = PILLAR_CRITERIA
         .iter()
         .zip(verdicts)
         .map(|(criterion, (score, critique))| {
-            json!({ "criterion": criterion, "score": score, "critique": critique })
+            json!({ "dimension": criterion, "score": score, "critique": critique })
         })
         .collect();
     json!({
-        "evalId": "ev_rules_1",
-        "status": "SETTLED",
-        "creditsCharged": 100,
-        "settledAt": "2026-10-14T17:18:42.000Z",
+        "id": "ev_rules_1",
+        "taskType": "claim",
+        "status": "COMPLETED",
+        "score": 41,
+        "route": "review",
+        "creditsCharged": CREDITS_PER_EVAL,
+        "completedAt": "2026-10-14T17:18:42.000Z",
         "result": {
-            "verdict": { "score": 41.0, "scale": "0-100", "decision": "revise", "confidence": "high" },
-            "verdicts": verdicts,
-            "action": { "route": "review" },
-            "evidence": { "evidenceBasis": "model-judgment", "pods": [], "peerAssessmentCount": 2 }
+            "score": 41,
+            "decision": "reject",
+            "confidence": "high",
+            "route": "review",
+            "reason": "Panel reasoning, summarised per dimension by the scorecard.",
+            "scorecard": scorecard,
         }
     })
 }
@@ -62,7 +68,7 @@ fn settled_body(verdicts: [(f64, &str); 4]) -> Value {
 fn parsed_verdicts(body: &Value) -> Vec<CriterionVerdict> {
     match parse_status_response(body).expect("fixture parses") {
         EvalStatus::Settled(eval) => eval.verdicts,
-        other => panic!("fixture should be SETTLED, got {other:?}"),
+        other => panic!("fixture should be COMPLETED, got {other:?}"),
     }
 }
 
@@ -109,13 +115,13 @@ fn add_refund_rule(store: &Store) -> String {
 #[test]
 fn a_low_scoring_critique_becomes_a_shadow_rule_with_its_source() {
     let (_dir, store) = store();
-    let verdicts = parsed_verdicts(&settled_body([
+    let verdicts = &parsed_verdicts(&settled_body([
         (9.0, "Reliable."),
         (8.0, "Good record."),
         (3.0, refund_critique()),
         (7.0, "Mature."),
     ]));
-    let report = distil_into_store(&store, "ev_rules_1", &verdicts);
+    let report = distil_into_store(&store, "ev_rules_1", verdicts);
 
     assert_eq!(report.created, vec!["SOLV-RULE-001".to_string()]);
     let rules = store.learned_rules();
@@ -136,13 +142,13 @@ fn a_low_scoring_critique_becomes_a_shadow_rule_with_its_source() {
 
 #[test]
 fn only_critiques_at_or_below_the_distillation_score_count() {
-    let at_the_line = parsed_verdicts(&settled_body([
+    let at_the_line = &parsed_verdicts(&settled_body([
         (4.0, refund_critique()),
         (4.1, refund_critique()),
         (9.0, refund_critique()),
         (10.0, refund_critique()),
     ]));
-    let drafts = distil("ev", &at_the_line);
+    let drafts = distil("ev", at_the_line);
     assert_eq!(drafts.len(), 1, "score 4.0 qualifies, 4.1 does not");
     assert_eq!(drafts[0].source.criterion, PILLAR_CRITERIA[0]);
 }
@@ -150,7 +156,7 @@ fn only_critiques_at_or_below_the_distillation_score_count() {
 #[test]
 fn a_critique_that_matches_no_topic_leaves_no_rule() {
     let (_dir, store) = store();
-    let verdicts = parsed_verdicts(&settled_body([
+    let verdicts = &parsed_verdicts(&settled_body([
         (1.0, "The site was slow and the copy was poorly written."),
         (
             2.0,
@@ -159,7 +165,7 @@ fn a_critique_that_matches_no_topic_leaves_no_rule() {
         (2.0, ""),
         (3.0, "No details."),
     ]));
-    let report = distil_into_store(&store, "ev", &verdicts);
+    let report = distil_into_store(&store, "ev", verdicts);
     assert!(report.created.is_empty());
     assert!(store.learned_rules().is_empty());
 }
@@ -167,16 +173,16 @@ fn a_critique_that_matches_no_topic_leaves_no_rule() {
 #[test]
 fn one_topic_gets_one_rule_across_verdicts_and_evaluations() {
     let (_dir, store) = store();
-    let verdicts = parsed_verdicts(&settled_body([
+    let verdicts = &parsed_verdicts(&settled_body([
         (2.0, refund_critique()),
         (3.0, "Again a money-back promise with no backing."),
         (9.0, "fine"),
         (9.0, "fine"),
     ]));
-    let first = distil_into_store(&store, "ev_a", &verdicts);
+    let first = distil_into_store(&store, "ev_a", verdicts);
     assert_eq!(first.created.len(), 1, "two verdicts, one topic, one rule");
 
-    let second = distil_into_store(&store, "ev_b", &verdicts);
+    let second = distil_into_store(&store, "ev_b", verdicts);
     assert!(second.created.is_empty());
     assert_eq!(second.duplicates, 1);
     assert_eq!(store.learned_rules().len(), 1);
@@ -185,13 +191,13 @@ fn one_topic_gets_one_rule_across_verdicts_and_evaluations() {
 #[test]
 fn distinct_topics_get_distinct_ascending_ids() {
     let (_dir, store) = store();
-    let verdicts = parsed_verdicts(&settled_body([
+    let verdicts = &parsed_verdicts(&settled_body([
         (2.0, refund_critique()),
         (2.0, "It pressures the agent with an urgent deadline."),
         (2.0, "It asks for the owner's private key."),
         (9.0, "fine"),
     ]));
-    let report = distil_into_store(&store, "ev", &verdicts);
+    let report = distil_into_store(&store, "ev", verdicts);
     assert_eq!(
         report.created,
         vec!["SOLV-RULE-001", "SOLV-RULE-002", "SOLV-RULE-003"]
