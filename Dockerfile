@@ -2,11 +2,14 @@
 # committed, so no Node toolchain exists in either stage (docs/DESIGN.md §6).
 # Every directory include_str!/include_bytes! reads must be copied: src,
 # static, templates, frontend/dist (the built SPA) and frontend/public (the
-# font licence text embedded next to the fonts).
+# font licence text embedded next to the fonts). benches/ is copied too:
+# Cargo.toml declares a [[bench]], and cargo refuses to parse the manifest
+# when its file is missing, even for a plain `cargo build --release`.
 FROM rust:1-bookworm AS build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY benches ./benches
 COPY static ./static
 COPY templates ./templates
 COPY frontend/dist ./frontend/dist
