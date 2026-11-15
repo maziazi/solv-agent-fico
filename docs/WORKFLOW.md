@@ -331,6 +331,10 @@ rather than in your editor; a different surface catches different mistakes.
 
 ### 4.3 `.github/workflows/cd.yml`
 
+Host: a Render free web service built from the committed `Dockerfile`. This
+replaced fly.io on 2026-11-15: the fly account was flagged high-risk at
+creation and could not host an app, and Render's free tier needs no card.
+
 ```yaml
 name: cd
 
@@ -350,25 +354,16 @@ jobs:
     environment: production        # requires a reviewer to approve
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Push provider secrets from Actions Secrets
+      - name: Trigger the Render deploy hook
         run: |
-          flyctl secrets set --stage \
-            CLOUDFLARE_ACCOUNT_ID="${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" \
-            CLOUDFLARE_API_TOKEN="${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-            SERV_API_KEY="${{ secrets.SERV_API_KEY }}" \
-            REPPO_API_KEY="${{ secrets.REPPO_API_KEY }}"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      - name: Deploy
-        run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache": "do_not_clear"}'
       - name: Verify the deployment answers
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS "https://${{ vars.FLY_APP_HOST }}/healthz"; then exit 0; fi
-            sleep 5
+            if curl -fsS "https://${{ vars.RENDER_SERVICE_HOST }}/healthz"; then exit 0; fi
+            sleep 10
           done
           exit 1
 ```
@@ -378,13 +373,13 @@ Two safety properties worth keeping:
 - **`environment: production` forces a human approval** before anything reaches
   production. Deploys trigger on a tag, not on every merge to `main`, so merging
   is never an accidental release.
-- **Secrets flow Actions Secrets → platform secrets and never touch the
-  repository.** `--stage` holds them until the deploy, so a half-applied secret
-  set cannot restart the app with partial credentials.
+- **Provider credentials never touch the repository.** They are set once in the
+  Render service's environment settings; the only secret in Actions is
+  `RENDER_DEPLOY_HOOK`, and the hook URL grants a deploy, not read access.
 
-Required GitHub Actions Secrets: `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, `SERV_API_KEY`, `REPPO_API_KEY`, `FLY_API_TOKEN`.
-Required Actions Variable: `FLY_APP_HOST`.
+Required GitHub Actions Secret: `RENDER_DEPLOY_HOOK`. Required Actions
+Variable: `RENDER_SERVICE_HOST`. The Cloudflare, SERV and Reppo credentials live
+in the Render service's environment, not in Actions.
 
 ### 4.4 Optional: scheduled claim audit
 
