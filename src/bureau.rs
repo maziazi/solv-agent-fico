@@ -337,24 +337,56 @@ async fn run_worker(shared: Arc<Shared>, client: Arc<dyn ReppoClient>, store: Ar
             shared.notify.notified().await;
         };
 
+        // Each job runs in its own task: a bug that panics while handling
+        // one job fails that job, not the worker, so the queue keeps moving
+        // and `in_flight` is always reset below.
         let job_id = job.id.clone();
-        let outcome = process_job(&shared, client.as_ref(), &job).await;
-        let final_status = match outcome {
-            Ok(settled) => {
-                apply_settled(&store, &job.request, &settled.eval_id, &settled.eval);
-                shared.spend(settled.eval.credits_charged);
-                JobStatus::Settled {
-                    eval_id: settled.eval_id,
-                    reppo_score: settled.eval.reppo_score,
+        let task = tokio::spawn(run_job(
+            Arc::clone(&shared),
+            Arc::clone(&client),
+            Arc::clone(&store),
+            job,
+        ));
+        let final_status = match task.await {
+            Ok(status) => status,
+            Err(join_error) => {
+                let what = if join_error.is_panic() {
+                    "panicked"
+                } else {
+                    "was cancelled"
+                };
+                eprintln!("solv: audit job {job_id} {what}");
+                JobStatus::Failed {
+                    reason: format!("audit job {what}"),
                 }
-            }
-            Err(reason) => {
-                eprintln!("solv: audit job {job_id} failed: {reason}");
-                JobStatus::Failed { reason }
             }
         };
         shared.set_status(&job_id, final_status);
         shared.queue().in_flight = false;
+    }
+}
+
+/// Runs one job to its final status. Runs inside its own task (see
+/// [`run_worker`]).
+async fn run_job(
+    shared: Arc<Shared>,
+    client: Arc<dyn ReppoClient>,
+    store: Arc<Store>,
+    job: Job,
+) -> JobStatus {
+    match process_job(&shared, client.as_ref(), &job).await {
+        Ok(settled) => {
+            apply_settled(&store, &job.request, &settled.eval_id, &settled.eval);
+            shared.spend(settled.eval.credits_charged);
+            JobStatus::Settled {
+                eval_id: settled.eval_id,
+                reppo_score: settled.eval.reppo_score,
+            }
+        }
+        Err(reason) => {
+            eprintln!("solv: audit job {} failed: {reason}", job.id);
+            JobStatus::Failed { reason }
+        }
     }
 }
 
@@ -494,6 +526,26 @@ async fn poll_until_resolved(
     }
 }
 
+/// How far ahead of our own clock a reported `settledAt` is still believed,
+/// as plain clock skew.
+pub const SETTLED_AT_SKEW_SECONDS: u64 = 300;
+
+/// The timestamp a score is aged from.
+///
+/// `settledAt` is Reppo's text. A timestamp far in the future would read as
+/// age 0 forever (`score::effective_score` saturates), keeping a score fresh
+/// beyond its 90-day life, so anything more than five minutes ahead of our
+/// clock is replaced by our clock — and so is a missing one. Never trusting
+/// a future time costs at most the evaluation's real age.
+pub fn clamp_settled_at(reported: Option<u64>, now_unix: u64) -> u64 {
+    match reported {
+        Some(settled_at) if settled_at <= now_unix.saturating_add(SETTLED_AT_SKEW_SECONDS) => {
+            settled_at
+        }
+        _ => now_unix,
+    }
+}
+
 /// Writes a settled evaluation onto the counterparty's profile, creating
 /// the profile for a counterparty nobody had seen. This is the one place a
 /// score enters the system (SPEC §3.2).
@@ -501,7 +553,7 @@ fn apply_settled(store: &Store, request: &AuditRequest, eval_id: &str, eval: &Se
     let score = SettledScore {
         reppo_score: eval.reppo_score,
         eval_id: eval_id.to_string(),
-        settled_at_unix: eval.settled_at_unix.unwrap_or_else(crate::api::now_unix),
+        settled_at_unix: clamp_settled_at(eval.settled_at_unix, crate::api::now_unix()),
         pillars: eval.pillars,
     };
     let profile = match store.profile(&request.counterparty_id) {

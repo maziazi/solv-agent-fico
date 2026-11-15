@@ -469,41 +469,66 @@ fn map_pillars(verdicts: &[CriterionVerdict]) -> Result<Pillars, ReppoError> {
 
 /// Parses an RFC 3339 timestamp (`2026-10-14T17:18:42.000Z`, or with a
 /// numeric offset) into unix seconds, without pulling a date dependency —
-/// the inverse of `api::iso8601_utc`. `None` for anything malformed or
-/// before 1970.
+/// the inverse of `api::iso8601_utc`.
+///
+/// The input is Reppo's text, so every failure is `None`, never a panic or
+/// a wrapped number: the shape is strict (fixed-width digits, `Z` or
+/// `±HH:MM`), the year is 1970..=9999, the offset is at most 23:59, and the
+/// final arithmetic is `checked_*`. Fractional seconds are dropped.
 pub fn parse_rfc3339_unix(text: &str) -> Option<u64> {
     let (date, rest) = text.split_once(['T', 't'])?;
     let mut date_parts = date.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: i64 = date_parts.next()?.parse().ok()?;
-    let day: i64 = date_parts.next()?.parse().ok()?;
-    if date_parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let year = fixed_digits(date_parts.next()?, 4)?;
+    let month = fixed_digits(date_parts.next()?, 2)?;
+    let day = fixed_digits(date_parts.next()?, 2)?;
+    if date_parts.next().is_some()
+        || !(1970..=9999).contains(&year)
+        || !(1..=12).contains(&month)
+        || !(1..=days_in_month(year, month)).contains(&day)
+    {
         return None;
     }
 
-    let split_at = rest.find(['Z', 'z', '+', '-'])?;
-    let (clock, zone) = rest.split_at(split_at);
-    let mut clock_parts = clock.split(':');
-    let hour: i64 = clock_parts.next()?.parse().ok()?;
-    let minute: i64 = clock_parts.next()?.parse().ok()?;
-    let seconds_field = clock_parts.next()?;
-    if clock_parts.next().is_some() {
-        return None;
+    let (clock, zone) = rest.split_at(rest.find(['Z', 'z', '+', '-'])?);
+    let (hms, fraction) = match clock.split_once('.') {
+        Some((hms, fraction)) => (hms, Some(fraction)),
+        None => (clock, None),
+    };
+    if let Some(fraction) = fraction {
+        if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
     }
-    let whole_seconds = seconds_field.split('.').next()?;
-    let second: i64 = whole_seconds.parse().ok()?;
-    if !(0..24).contains(&hour) || !(0..60).contains(&minute) || !(0..=60).contains(&second) {
+    let mut clock_parts = hms.split(':');
+    let hour = fixed_digits(clock_parts.next()?, 2)?;
+    let minute = fixed_digits(clock_parts.next()?, 2)?;
+    let second = fixed_digits(clock_parts.next()?, 2)?;
+    if clock_parts.next().is_some()
+        || !(0..24).contains(&hour)
+        || !(0..60).contains(&minute)
+        || !(0..=60).contains(&second)
+    {
         return None;
     }
 
-    let offset_seconds = match zone {
+    let offset_seconds: i64 = match zone {
         "Z" | "z" => 0,
-        signed => {
-            let sign = if signed.starts_with('-') { -1 } else { 1 };
-            let (offset_hours, offset_minutes) = signed[1..].split_once(':')?;
-            let hours: i64 = offset_hours.parse().ok()?;
-            let minutes: i64 = offset_minutes.parse().ok()?;
-            sign * (hours * 3600 + minutes * 60)
+        _ => {
+            let sign: i64 = match zone.as_bytes().first()? {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let (offset_hours, offset_minutes) = zone.get(1..)?.split_once(':')?;
+            let hours = fixed_digits(offset_hours, 2)?;
+            let minutes = fixed_digits(offset_minutes, 2)?;
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            hours
+                .checked_mul(3600)?
+                .checked_add(minutes.checked_mul(60)?)?
+                .checked_mul(sign)?
         }
     };
 
@@ -513,10 +538,37 @@ pub fn parse_rfc3339_unix(text: &str) -> Option<u64> {
     let yoe = y - era * 400;
     let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
+    let days = era
+        .checked_mul(146_097)?
+        .checked_add(doe)?
+        .checked_sub(719_468)?;
 
-    let unix = days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds;
+    let time_of_day = hour
+        .checked_mul(3600)?
+        .checked_add(minute.checked_mul(60)?)?
+        .checked_add(second)?;
+    let unix = days
+        .checked_mul(86_400)?
+        .checked_add(time_of_day)?
+        .checked_sub(offset_seconds)?;
     u64::try_from(unix).ok()
+}
+
+/// Exactly `width` ASCII digits and nothing else — no sign, no whitespace.
+fn fixed_digits(text: &str, width: usize) -> Option<i64> {
+    if text.len() != width || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        _ => 28,
+    }
 }
 
 /// A scripted evaluation outcome for [`MockReppoClient`].
@@ -525,8 +577,18 @@ pub enum MockOutcome {
     /// Settles with this Reppo score and pillar scores (order: reliability,
     /// track record, safety, maturity).
     Settled { reppo_score: f64, pillars: [u8; 4] },
+    /// As [`MockOutcome::Settled`], with an explicit `settledAt` (`None`
+    /// models a response that omits it).
+    SettledAt {
+        reppo_score: f64,
+        pillars: [u8; 4],
+        settled_at_unix: Option<u64>,
+    },
     /// `FAILED`: not charged.
     Failed,
+    /// `FAILED` with a specific `result.reason`, for exercising how the
+    /// worker treats untrusted reason text.
+    FailedWith(String),
     /// `status` itself errors with an unparsable body.
     Unparsable,
 }
@@ -628,34 +690,46 @@ impl ReppoClient for MockReppoClient {
             MockOutcome::Settled {
                 reppo_score,
                 pillars,
-            } => {
-                let verdicts = PILLAR_CRITERIA
-                    .iter()
-                    .zip(pillars)
-                    .map(|(criterion, score)| CriterionVerdict {
-                        criterion: (*criterion).to_string(),
-                        score: f64::from(score),
-                        critique: format!("mock critique for score {score}"),
-                    })
-                    .collect();
-                Ok(EvalStatus::Settled(Box::new(SettledEval {
-                    reppo_score,
-                    settled_at_unix: Some(1_800_000_000),
-                    credits_charged: CREDITS_PER_EVAL,
-                    pillars: Pillars {
-                        reliability: pillars[0],
-                        track_record: pillars[1],
-                        safety: pillars[2],
-                        maturity: pillars[3],
-                    },
-                    verdicts,
-                    route: Some("review".to_string()),
-                })))
-            }
+            } => Ok(mock_settled(
+                reppo_score,
+                pillars,
+                Some(crate::api::now_unix()),
+            )),
+            MockOutcome::SettledAt {
+                reppo_score,
+                pillars,
+                settled_at_unix,
+            } => Ok(mock_settled(reppo_score, pillars, settled_at_unix)),
             MockOutcome::Failed => Ok(EvalStatus::Failed(Some("mock failure".to_string()))),
+            MockOutcome::FailedWith(reason) => Ok(EvalStatus::Failed(Some(reason))),
             MockOutcome::Unparsable => Err(ReppoError::Parse("mock: unparsable body".to_string())),
         }
     }
+}
+
+fn mock_settled(reppo_score: f64, pillars: [u8; 4], settled_at_unix: Option<u64>) -> EvalStatus {
+    let verdicts = PILLAR_CRITERIA
+        .iter()
+        .zip(pillars)
+        .map(|(criterion, score)| CriterionVerdict {
+            criterion: (*criterion).to_string(),
+            score: f64::from(score),
+            critique: format!("mock critique for score {score}"),
+        })
+        .collect();
+    EvalStatus::Settled(Box::new(SettledEval {
+        reppo_score,
+        settled_at_unix,
+        credits_charged: CREDITS_PER_EVAL,
+        pillars: Pillars {
+            reliability: pillars[0],
+            track_record: pillars[1],
+            safety: pillars[2],
+            maturity: pillars[3],
+        },
+        verdicts,
+        route: Some("review".to_string()),
+    }))
 }
 
 /// A Tier 3 client used when `REPPO_API_KEY` is absent: every call fails,

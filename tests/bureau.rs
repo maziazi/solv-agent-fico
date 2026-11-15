@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use solv::bureau::{AuditRequest, Bureau, BureauConfig, EnqueueError, JobStatus};
+use solv::bureau::{AuditRequest, Bureau, BureauConfig, EnqueueError, JobStatus, clamp_settled_at};
 use solv::reppo::{
     EvalStatus, EvalSubmission, MockOutcome, MockReppoClient, ReppoClient, ReppoError,
     SubmissionError, UnconfiguredReppoClient,
@@ -578,4 +578,109 @@ fn job_status_wire_tags_are_pinned() {
         })["status"],
         "FAILED"
     );
+}
+
+#[test]
+fn a_future_settled_at_is_clamped_to_now() {
+    let now = 1_800_000_000;
+    assert_eq!(
+        clamp_settled_at(None, now),
+        now,
+        "no settledAt: use our clock"
+    );
+    assert_eq!(clamp_settled_at(Some(now - 100), now), now - 100);
+    assert_eq!(
+        clamp_settled_at(Some(now + 300), now),
+        now + 300,
+        "five minutes of skew is tolerated as reported"
+    );
+    assert_eq!(clamp_settled_at(Some(now + 301), now), now);
+    assert_eq!(clamp_settled_at(Some(u64::MAX), now), now);
+    assert_eq!(
+        clamp_settled_at(Some(5), u64::MAX),
+        5,
+        "the skew allowance saturates instead of overflowing"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_far_future_settled_at_never_makes_a_score_immortal() {
+    let (_dir, store) = store();
+    let mock = Arc::new(MockReppoClient::new(
+        vec![MockOutcome::SettledAt {
+            reppo_score: 78.0,
+            pillars: [7, 8, 9, 6],
+            settled_at_unix: Some(4_102_444_800), // 2100-01-01
+        }],
+        0,
+    ));
+    let (bureau, _worker) = spawn(mock, &store, BureauConfig::default());
+    let before = solv::api::now_unix();
+    let enqueued = bureau.enqueue(request("future")).unwrap();
+    wait_terminal(&bureau, &enqueued.job_id).await;
+    let after = solv::api::now_unix();
+
+    let stored = store
+        .profile("future")
+        .unwrap()
+        .score
+        .unwrap()
+        .settled_at_unix;
+    assert!(
+        (before..=after).contains(&stored),
+        "stored {stored} should be clamped to now ({before}..={after})"
+    );
+}
+
+/// Panics inside `submit` on its first call, then behaves like the mock.
+struct PanicsOnce {
+    inner: MockReppoClient,
+    armed: std::sync::Mutex<bool>,
+}
+
+#[async_trait]
+impl ReppoClient for PanicsOnce {
+    async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
+        let armed = std::mem::replace(&mut *self.armed.lock().unwrap(), false);
+        if armed {
+            panic!("simulated bug while handling one job");
+        }
+        self.inner.submit(submission).await
+    }
+
+    async fn status(&self, eval_id: &str) -> Result<EvalStatus, ReppoError> {
+        self.inner.status(eval_id).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_that_panics_fails_alone_and_the_queue_keeps_moving() {
+    let (_dir, store) = store();
+    let client = Arc::new(PanicsOnce {
+        inner: MockReppoClient::new(vec![], 0),
+        armed: std::sync::Mutex::new(true),
+    });
+    let (bureau, worker) = spawn(client, &store, BureauConfig::default());
+    let bad = bureau.enqueue(request("bad")).unwrap();
+    let good = bureau.enqueue(request("good")).unwrap();
+
+    let bad_status = wait_terminal(&bureau, &bad.job_id).await;
+    let JobStatus::Failed { reason } = bad_status else {
+        panic!("expected Failed, got {bad_status:?}");
+    };
+    assert!(reason.contains("panicked"), "{reason}");
+    assert!(
+        !reason.contains("simulated bug"),
+        "the panic payload is not echoed into a status: {reason}"
+    );
+
+    assert!(matches!(
+        wait_terminal(&bureau, &good.job_id).await,
+        JobStatus::Settled { .. }
+    ));
+    assert!(!worker.is_finished(), "the worker task itself survived");
+    assert!(!bureau.is_busy(), "in_flight was reset after the panic");
+    assert_eq!(bureau.queued_len(), 0);
+    assert!(store.profile("bad").is_none());
+    assert!(store.profile("good").is_some());
 }

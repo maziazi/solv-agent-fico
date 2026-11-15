@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 use solv::bureau::{AuditRequest, Bureau, BureauConfig, JobStatus};
 use solv::reppo::{
     ALLOWED_SETTLEMENT_MINUTES, EvalStatus, EvalSubmission, MAX_PAYLOAD_BYTES, PILLAR_CRITERIA,
-    ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_status_response,
+    ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
+    parse_status_response,
 };
 use solv::score::Pillars;
 use solv::state::Store;
@@ -327,6 +328,68 @@ async fn real_client_rejects_a_submit_response_without_an_eval_id() {
         client(base).submit(&submission()).await,
         Err(ReppoError::Parse(_))
     ));
+}
+
+#[test]
+fn rfc3339_overflowing_input_is_none_and_never_panics() {
+    // Each of these used to overflow i64 arithmetic: a panic in a debug
+    // build, silent wraparound in release.
+    for hostile in [
+        "9223372036854775807-10-14T17:18:42Z",
+        "2026-10-14T17:18:42+9223372036854775807:00",
+        "2026-10-14T17:18:42-9223372036854775807:00",
+        "2026-10-14T9223372036854775807:18:42Z",
+        "2026-10-14T17:18:9223372036854775807Z",
+        "2026-9223372036854775807-14T17:18:42Z",
+        "2026-10-9223372036854775807T17:18:42Z",
+        "99999999999999999999-10-14T17:18:42Z",
+    ] {
+        assert_eq!(parse_rfc3339_unix(hostile), None, "{hostile}");
+    }
+}
+
+#[test]
+fn rfc3339_is_bounded_to_years_1970_through_9999_and_sane_offsets() {
+    assert_eq!(parse_rfc3339_unix("1969-12-31T23:59:59Z"), None);
+    assert!(parse_rfc3339_unix("1970-01-01T00:00:00Z").is_some());
+    assert!(parse_rfc3339_unix("9999-12-31T23:59:59Z").is_some());
+    assert_eq!(parse_rfc3339_unix("10000-01-01T00:00:00Z"), None);
+
+    // |offset| <= 23:59.
+    assert!(parse_rfc3339_unix("2026-10-14T17:18:42+23:59").is_some());
+    assert!(parse_rfc3339_unix("2026-10-14T17:18:42-23:59").is_some());
+    for bad in ["+24:00", "-24:00", "+00:60", "+99:99", "+1:00", "+01:0"] {
+        assert_eq!(
+            parse_rfc3339_unix(&format!("2026-10-14T17:18:42{bad}")),
+            None,
+            "offset {bad}"
+        );
+    }
+}
+
+#[test]
+fn rfc3339_rejects_malformed_shapes_instead_of_guessing() {
+    for bad in [
+        "2026-10-14T17:18:42",
+        "2026-10-14T17:18:42Z+01:00",
+        "2026-10-14T17:18:42Zjunk",
+        "2026-02-30T00:00:00Z",
+        "2026-10-14T24:00:00Z",
+        "2026-10-14T17:60:00Z",
+        "2026-10-14T17:18:61Z",
+        "+026-10-14T17:18:42Z",
+        "2026-10-14T+7:18:42Z",
+        "2026-10-14T17:18:42.Z",
+        "2026-10-14 17:18:42Z",
+        "",
+    ] {
+        assert_eq!(parse_rfc3339_unix(bad), None, "{bad:?}");
+    }
+    // Fractional seconds are dropped, not rounded.
+    assert_eq!(
+        parse_rfc3339_unix("2026-10-14T17:18:42.999Z"),
+        parse_rfc3339_unix("2026-10-14T17:18:42Z")
+    );
 }
 
 /// Hits the real Reppo Evaluation API through the whole worker path:
