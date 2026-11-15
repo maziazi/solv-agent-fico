@@ -10,10 +10,12 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::Value;
 
-use super::escape::{escape, truncate_chars};
-use super::{CSP_NO_SCRIPT, html_response, layout};
+use super::assets::asset_version;
+use super::escape::{escape, escape_exact, truncate_chars};
+use super::{CSP_NO_SCRIPT, CSP_RECEIPT_VERIFY, html_response, layout};
 use crate::AppState;
 use crate::api::iso8601_utc;
+use crate::receipt::canonical_json;
 use crate::state::Receipt;
 
 /// SPEC §6.1: a quote is shown to at most this many characters.
@@ -30,14 +32,22 @@ pub async fn receipt_page(State(state): State<AppState>, Path(id): Path<String>)
     match state.store().receipt(&id) {
         Some(receipt) => {
             let title = format!("Receipt {id} — Solv");
+            // Script is allowed only on a receipt that carries something to
+            // verify, and then only the one asset the shell links.
+            let (csp, scripts) = if is_verifiable(&receipt) {
+                (CSP_RECEIPT_VERIFY, verify_script_tag())
+            } else {
+                (CSP_NO_SCRIPT, String::new())
+            };
             html_response(
                 StatusCode::OK,
-                CSP_NO_SCRIPT,
+                csp,
                 "public, max-age=300",
                 layout::render(&layout::Page {
                     title: &title,
                     content: &render_receipt(&id, &receipt),
                     footer: FOOTER,
+                    scripts: &scripts,
                     ..layout::Page::default()
                 }),
             )
@@ -54,6 +64,20 @@ pub async fn receipt_page(State(state): State<AppState>, Path(id): Path<String>)
             }),
         ),
     }
+}
+
+/// A receipt can be verified in the browser when it kept both its evidence
+/// document and the hash printed for it. Partial records and receipts with no
+/// hash have nothing to compare, so they get no script and no script policy.
+pub fn is_verifiable(receipt: &Receipt) -> bool {
+    receipt.evidence.is_object() && !receipt.evidence_sha256.is_empty()
+}
+
+/// The only script tag any page emits: a same-origin asset with no inline
+/// body, versioned by content like the stylesheet.
+fn verify_script_tag() -> String {
+    let version = asset_version("receipt-verify.js").unwrap_or_default();
+    format!("<script src=\"/static/receipt-verify.js?v={version}\"></script>")
 }
 
 /// The 404 body. It deliberately does not repeat the requested id.
@@ -401,7 +425,7 @@ fn hash_section(id: &str, receipt: &Receipt, ruleset: Option<u64>) -> String {
         out.push_str("<p>No evidence hash was recorded on this receipt.</p>\n");
     } else {
         out.push_str(&format!(
-            "<p class=\"hash mono\">{}</p>\n",
+            "<p class=\"hash mono\" id=\"evidence-hash\">{}</p>\n",
             escape(truncate_chars(&receipt.evidence_sha256, 128).0)
         ));
     }
@@ -420,8 +444,32 @@ fn hash_section(id: &str, receipt: &Receipt, ruleset: Option<u64>) -> String {
             escape(id)
         ));
     }
+    if is_verifiable(receipt) {
+        out.push_str(&verifier_block(&receipt.evidence));
+    }
     out.push_str("</section>\n");
     out
+}
+
+/// The in-browser verifier's markup: an empty slot the script fills with a
+/// button, and the canonical evidence text it hashes.
+///
+/// The browser cannot rebuild the canonical text from the evidence it parses:
+/// floats are written as Python's `repr`, which `JSON.stringify` does not
+/// reproduce (`1.0` becomes `1`). So the server's exact canonical string is
+/// embedded and hashed as is. It goes through [`escape_exact`], not
+/// [`escape`], because the hash covers raw bidi and zero-width characters
+/// that `escape` would turn into `[U+XXXX]` markers. The element is `hidden`:
+/// unreadable text that cannot steer a reader, present only for hashing.
+fn verifier_block(evidence: &Value) -> String {
+    let canonical = canonical_json(evidence);
+    format!(
+        "<p class=\"small\">The button below hashes the <span class=\"mono\">{}</span> bytes of canonical evidence embedded in this page and compares the result with the printed hash. It needs JavaScript; without it, use the commands above. Both checks read this page or this server's own copy, so for a verdict that does not rely on Solv, hash a copy you fetched yourself.</p>\n\
+         <div id=\"verify-slot\"></div>\n\
+         <pre id=\"canonical-evidence\" hidden>{}</pre>\n",
+        canonical.len(),
+        escape_exact(&canonical)
+    )
 }
 
 // ---------------------------------------------------------------------------

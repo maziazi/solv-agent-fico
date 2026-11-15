@@ -684,6 +684,19 @@ from, so it can be contested.
   `service_description` text from untrusted parties.
 - No external database. This decision protects §2.1 — state reads at ≤ 1 ms p95
   — and keeps deployment to a single binary.
+- **Demo seed (opt-in):** when `SOLV_SEED_FILE` names a file and the store has
+  no profiles, the profiles in it are loaded; existing state is never
+  overwritten, and a bad file stops startup instead of failing mid-request.
+  The committed `seed/demo_profiles.json` holds one profile
+  (`github-rest-api`) built from one real settled evaluation
+  (`cmwhy4whj000707jptcchz6fz`, score 100, confidence high, 2026-11-15). It
+  is not a state snapshot: no receipts, no rules, and no counterparty-supplied
+  text beyond a name and a URL. A seeded score goes through the same decay as
+  any other (§4.2): it starts to decay after 30 days (2026-12-15) and is
+  discarded after 90 days (about 2027-02-13), at which point the profile is
+  UNRATED again. To refresh it, run a real audit (440 Reppo credits, owner
+  approval required), then copy that evaluation's `eval_id`, `reppo_score`,
+  `settled_at_unix` and pillars into the file.
 
 Accepted limits: state does not survive beyond one node, there is no
 replication, and its size is bounded by RAM. For the current scope this is
@@ -950,7 +963,38 @@ metrics: distribution of tiers used, p50/p95 latency per path, cost per check,
 Reppo credits remaining. Metrics are computed from real receipts, never from
 constants.
 
-### 7.5 Frontend routes
+### 7.5 `GET /api/v1/agent/{id}`
+
+A profile read with no model call: no Clef, no SERV, no Reppo. It answers what
+Solv already knows about one counterparty, keyed the same way the hot path keys
+profiles (`counterparty_name`).
+
+```json
+{
+  "id": "github-rest-api",
+  "rated": true,
+  "tier": "EXCEPTIONAL",
+  "fico_score": 850,
+  "score_age_days": 1,
+  "pillars": { "reliability": 5, "track_record": 10, "safety": 5, "maturity": 5 },
+  "score_source": { "provider": "reppo", "eval_id": "…", "settled_at": "2026-11-15T14:47:41Z" },
+  "max_safe_spend": 500.0,
+  "target_url": "https://api.github.com"
+}
+```
+
+- An unknown id is `200` with `rated: false`, `tier: "UNRATED"`, null score,
+  pillars and source, and `max_safe_spend: 0`. Absence of evidence is a normal
+  answer here, not a `404`; a caller must not read it as evidence of risk.
+- An expired score (over 90 days) reads as unrated and shows no pillars: stale
+  evidence is not presented as current.
+- `max_safe_spend` is the band cap, set to `0` when the safety pillar is at or
+  below the floor (§5.4 row 5). It is **not** a payment decision: injection,
+  amount, learned rules and the latency ceiling apply only in
+  `POST /api/v1/pre-spend-check`. Use the lookup to screen, the gate to pay.
+- An `id` over 2,048 bytes is `400`.
+
+### 7.6 Frontend routes
 
 *(2026-11-15, Frontend v2):* `/` holds the landing page; the pre-spend
 simulator lives at `/desk`; the registry and receipts live at `/explorer` (the
@@ -980,13 +1024,30 @@ shell under the same CSP; the client router resolves the path. Details in
 | --- | --- | --- |
 | Prompt injection in `service_description` | Prompt-position isolation + `serv_prompt_guard` + the Tier 1 `noul` question | G3 |
 | Indirect injection from target page content | Page content is fetched only on the batch audit path, and still treated as data | G3 |
-| An attacker burning the Reppo quota | `audit-counterparty` is rate-limited per API key; remaining credits are exposed on `/directory` | — |
+| An attacker burning the Reppo quota | `audit-counterparty` requires `Authorization: Bearer $SOLV_ADMIN_TOKEN` (constant-time compare, closed with 401 when no token is set, no detail on which part failed); the credit budget defaults to 0; remaining credits are exposed on `/directory` | — |
+| An attacker burning the Cloudflare and SERV quota through the public gate | `pre-spend-check` is rate limited per client (default 20 requests per minute) and capped in concurrency (default 8 in flight); refusals are `429` with `Retry-After` | — |
 | Denial of service via a giant description | Request size limits; descriptions over 1,500 characters escalate, over 50 KB are rejected | G2 |
 | All AI providers down, so every transaction passes | Fail-closed: the result is `HOLD` | G1 |
 | An old receipt replayed as an approval | The receipt carries `amount_usd` and an evidence hash (both sealed), and a receipt is not an authorisation token — nothing in Solv accepts one as proof of approval. Its `created_at` is **not** covered by the hash (§6.3), so the hash alone does not prove how old a receipt is | G4 |
 | Learned rules poisoned via manipulated critique | Rules are born `shadow`, promotion is manual, the source quote is stored | — |
 | XSS from a counterparty quote on the public receipt page | `quote` is escaped, never rendered as HTML/Markdown, strict CSP | — |
 | A forged score being injected | There is no score-writing endpoint (§3.2) | — |
+
+Settings for the two guards, read once at boot (an invalid value stops the
+boot rather than loosening a guard):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SOLV_RATE_LIMIT_PER_MIN` | `20` | Requests one client may make to `pre-spend-check` in any 60-second window (1 to 10,000). |
+| `SOLV_MAX_CONCURRENT_CHECKS` | `8` | Checks in flight at once across all clients (1 to 1,000). |
+| `SOLV_TRUST_PROXY` | `0` | `1` reads the client address from the **rightmost** `X-Forwarded-For` entry. Use only behind exactly one proxy that appends the address it saw; otherwise the header is attacker-controlled. |
+| `SOLV_ADMIN_TOKEN` | unset | Bearer token for `audit-counterparty`, at least 16 characters. Unset means the endpoint always answers `401`. |
+
+Limits that remain: the limiter is per process and in memory, so it resets on
+restart and is not shared between instances; one IPv6 /64 counts as one client;
+and the tracking table is capped at 10,000 clients, after which unknown clients
+are refused until older windows lapse. `/healthz`, `/api/v1/directory`,
+receipts and the pages are not limited.
 
 ### 8.3 Attack Lab
 
@@ -1030,6 +1091,7 @@ labels. Without a label, the claim must not be written.
 | Blended cost under $0.0005 per check | **UNPROVEN** | The §10 arithmetic is sound, but unmeasured |
 | Attack Lab: zero `APPROVE` on the injection corpus | **PROVEN** | `the_corpus_never_approves_and_every_reason_holds` (`tests/attack.rs`): 20 cases across the six §8.3 categories, zero approvals, span honesty checked per case |
 | Fail-closed: no path to `APPROVE` with all tiers down | **PROVEN** | `all_detectors_down_hold_fail_closed_and_never_approve` (`tests/attack.rs`) drives a full request with both providers failing and asserts HOLD on `SOLV-SYSTEM-003` |
+| Agent lookup (`GET /api/v1/agent/{id}`) cost, no model call | **MEASURED** | 2026-11-16, criterion, in-process router with a profile in state: **2.46 µs** (95% CI 2.45-2.47 µs) per request including axum dispatch and JSON serialisation, against 24.1 µs for the mock `pre-spend-check`. `agent_lookup_offline` in `benches/hot_path.rs`; `tests/agent.rs` uses providers that panic if called, so the no-model-call property is **PROVEN**. Floor only: it excludes the network and TLS, so it is not an end-to-end latency claim |
 | Gate-side hot-path cost over mock detectors | **MEASURED** | 2026-11-15, n=1000 clean checks in-process: p50 **47 µs**, p95 **58 µs**, max 733 µs per request including axum and serialisation; criterion (default 100 samples per function): state read **52 ns** (budget 200 000 ns), policy gate **153 ns**, full offline request **27 µs**. Commands: `cargo bench` and `cargo run --release --example load_run -- 1000`. Floor only — provider latency is not measured; the end-to-end budget row above stays as it is |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
 | A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |

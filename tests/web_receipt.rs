@@ -1,6 +1,7 @@
 //! The public receipt page (docs/SPEC.md §7.3, docs/DESIGN.md §4.2): a
-//! script-free HTML record whose every dynamic value is escaped. All tests
-//! run offline against mocked tiers.
+//! server-rendered HTML record whose every dynamic value is escaped. Its only
+//! script is the same-origin hash verifier, and only on a receipt that has
+//! something to verify. All tests run offline against mocked tiers.
 
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use solv::state::{Profile, Receipt, Store};
 use solv::tier1::{ClefClient, MockClefClient};
 use solv::tier2::{MockServClient, ServClient, ServVerdict};
-use solv::web::CSP_NO_SCRIPT;
+use solv::web::{CSP_NO_SCRIPT, CSP_RECEIPT_VERIFY};
 use solv::{AppState, build_router};
 use tower::ServiceExt;
 
@@ -146,12 +147,43 @@ const ALLOWED_TAGS: &[&str] = &[
     "text",
 ];
 
+/// The one script tag a receipt page may contain: a same-origin asset with a
+/// hex version and no inline body.
+fn is_verify_script_open_tag(inner: &str) -> bool {
+    inner
+        .strip_prefix("script src=\"/static/receipt-verify.js?v=")
+        .and_then(|rest| rest.strip_suffix('"'))
+        .is_some_and(|version| {
+            !version.is_empty() && version.chars().all(|c| c.is_ascii_hexdigit())
+        })
+}
+
 fn assert_only_our_markup(html: &str) {
     let mut rest = html;
+    let mut open_script = false;
     while let Some(at) = rest.find('<') {
         let tag = &rest[at + 1..];
         let end = tag.find('>').expect("unterminated tag");
         let inner = &tag[..end];
+        if open_script {
+            assert_eq!(
+                (&rest[..at], inner),
+                ("", "/script"),
+                "the verifier script has no inline body"
+            );
+            open_script = false;
+            rest = &tag[end + 1..];
+            continue;
+        }
+        if inner.starts_with("script") {
+            assert!(
+                is_verify_script_open_tag(inner),
+                "only the verifier asset may be a script: <{inner}>"
+            );
+            open_script = true;
+            rest = &tag[end + 1..];
+            continue;
+        }
         let name: String = inner
             .trim_start_matches('/')
             .chars()
@@ -166,7 +198,7 @@ fn assert_only_our_markup(html: &str) {
             if let Some((attribute, value)) = token.split_once('=') {
                 let attribute = attribute.to_ascii_lowercase();
                 assert!(
-                    !attribute.starts_with("on") && attribute != "style",
+                    !attribute.starts_with("on") && attribute != "style" && attribute != "src",
                     "forbidden attribute {attribute} in <{inner}>"
                 );
                 if attribute == "href" {
@@ -182,6 +214,7 @@ fn assert_only_our_markup(html: &str) {
         }
         rest = &tag[end + 1..];
     }
+    assert!(!open_script, "unterminated verifier script");
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
@@ -192,15 +225,36 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
         .unwrap()
 }
 
+/// The page without the hidden canonical-evidence block, which carries the
+/// exact hashed bytes (raw bidi characters, untruncated values) and is never
+/// shown. Every claim about what a reader sees is made on this.
+fn visible_page(html: &str) -> String {
+    let open = "<pre id=\"canonical-evidence\" hidden>";
+    match html.find(open) {
+        Some(start) => {
+            let end = start + html[start..].find("</pre>").expect("block end") + "</pre>".len();
+            format!("{}{}", &html[..start], &html[end..])
+        }
+        None => html.to_string(),
+    }
+}
+
 fn assert_hardened(headers: &HeaderMap) {
     assert_eq!(header(headers, "content-type"), "text/html; charset=utf-8");
     let csp = header(headers, "content-security-policy");
-    assert_eq!(csp, CSP_NO_SCRIPT);
+    assert!(
+        csp == CSP_NO_SCRIPT || csp == CSP_RECEIPT_VERIFY,
+        "only the two known policies may appear: {csp}"
+    );
     assert!(csp.contains("default-src 'none'"));
     assert!(!csp.contains("unsafe-inline") && !csp.contains("unsafe-eval"));
     assert!(
-        !csp.contains("script-src"),
-        "no script source is allowed at all"
+        !csp.contains("connect-src"),
+        "the verifier makes no request"
+    );
+    assert!(
+        csp == CSP_NO_SCRIPT || csp.contains("script-src 'self';"),
+        "a script policy allows this origin and nothing else"
     );
     assert!(csp.contains("frame-ancestors 'none'") && csp.contains("base-uri 'none'"));
     assert_eq!(header(headers, "x-content-type-options"), "nosniff");
@@ -412,8 +466,13 @@ async fn hostile_counterparty_fields_never_become_markup() {
         assert_only_our_markup(&html);
         assert!(!html.contains("PWNED</h1>"), "{payload:?}");
         assert!(
-            !html.contains("<img") && !html.contains("<script") && !html.contains("<svg/"),
+            !html.contains("<img") && !html.contains("<script>") && !html.contains("<svg/"),
             "{payload:?}"
+        );
+        assert_eq!(
+            html.matches("<script").count(),
+            1,
+            "{payload:?}: only the verifier asset tag, never a payload"
         );
     }
 }
@@ -508,6 +567,7 @@ async fn bidi_and_control_characters_are_shown_not_obeyed() {
         crafted_receipt(json!({"reasons": []}), evidence)
     ));
     let (_, _, html) = send(&router, "/receipt/slv_bidi").await;
+    let html = visible_page(&html);
     assert!(
         html.contains("[U+202E]")
             && html.contains("[U+202C]")
@@ -529,6 +589,7 @@ async fn very_long_counterparty_values_are_bounded_on_the_page() {
         crafted_receipt(json!({"reasons": []}), evidence)
     ));
     let (_, _, html) = send(&router, "/receipt/slv_long").await;
+    let html = visible_page(&html);
     assert!(!html.contains(&"N".repeat(301)) && !html.contains(&"u".repeat(301)));
     assert!(html.contains('…'), "truncation is visible");
 }
@@ -602,7 +663,20 @@ async fn stylesheet_is_served_locally_and_pulls_nothing_from_elsewhere() {
     assert!(header(&headers, "content-type").starts_with("text/css"));
     assert_eq!(header(&headers, "x-content-type-options"), "nosniff");
     assert!(!css.contains("@import") && !css.contains("http://") && !css.contains("https://"));
-    assert!(!css.contains("url("), "no external or inline resources");
+    // The only resources the stylesheet may name are the self-hosted fonts:
+    // a quoted same-origin /static/fonts/*.woff2 path. Anything else
+    // (data: URIs, other paths, other origins) is still refused.
+    let mut rest = css.as_str();
+    while let Some(at) = rest.find("url(") {
+        let after = &rest[at + 4..];
+        let end = after.find(')').expect("unterminated url(");
+        let target = &after[..end];
+        assert!(
+            target.starts_with("\"/static/fonts/") && target.ends_with(".woff2\""),
+            "only self-hosted fonts may be referenced, found url({target})"
+        );
+        rest = &after[end + 1..];
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -648,7 +722,12 @@ async fn slot_markers_in_the_receipt_id_cannot_pull_the_body_into_the_title() {
     assert!(!title.contains('<'), "title holds only text: {title}");
     assert_eq!(html.matches("<main").count(), 1);
     assert_eq!(html.matches("<footer").count(), 1);
-    assert!(!html.contains("<script"), "the id never becomes markup");
+    assert!(!html.contains("<script>"), "the id never becomes markup");
+    assert_eq!(
+        html.matches("<script").count(),
+        1,
+        "only the verifier asset tag"
+    );
 }
 
 #[tokio::test]
@@ -821,5 +900,262 @@ async fn shell_slots_for_head_footer_and_scripts_are_empty_or_filled_never_leake
     let (_, _, html) = send(&router, "/receipt/slv_slots").await;
     assert!(!html.contains("{{"), "no unfilled slot marker");
     assert!(html.contains("A receipt is a record of a decision."));
-    assert!(!html.contains("<script"));
+    assert_eq!(
+        html.matches("<script src=\"/static/receipt-verify.js?v=")
+            .count(),
+        1,
+        "the scripts slot holds the verifier tag and nothing else"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// In-browser hash verifier (static/receipt-verify.js)
+// ---------------------------------------------------------------------------
+
+/// Decodes exactly the entities `escape_exact` emits, in one left-to-right
+/// pass, as an HTML parser's `textContent` would.
+fn decode_exact_entities(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        let (decoded, len) = [
+            ("&amp;", '&'),
+            ("&lt;", '<'),
+            ("&gt;", '>'),
+            ("&quot;", '"'),
+            ("&#39;", '\''),
+            ("&#96;", '`'),
+        ]
+        .iter()
+        .find(|(entity, _)| after.starts_with(entity))
+        .map(|(entity, c)| (*c, entity.len()))
+        .unwrap_or_else(|| panic!("unexpected entity at: {}", &after[..after.len().min(12)]));
+        out.push(decoded);
+        rest = &after[len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The text of `<pre id="canonical-evidence" hidden>…</pre>`, still entity-encoded.
+fn embedded_canonical(html: &str) -> &str {
+    let open = "<pre id=\"canonical-evidence\" hidden>";
+    let start = html.find(open).expect("canonical block") + open.len();
+    let end = start + html[start..].find("</pre>").expect("block end");
+    &html[start..end]
+}
+
+fn printed_hash(html: &str) -> String {
+    let open = "id=\"evidence-hash\">";
+    let start = html.find(open).expect("printed hash") + open.len();
+    let end = start + html[start..].find("</p>").expect("hash end");
+    html[start..end].to_string()
+}
+
+fn verifiable_receipt(evidence: Value) -> Receipt {
+    Receipt {
+        decision: "BLOCK".to_string(),
+        amount_usd: 50.0,
+        created_at_unix: 1_700_000_000,
+        evidence_sha256: solv::receipt::evidence_sha256(&evidence),
+        evidence,
+        response: json!({"reasons": []}),
+    }
+}
+
+#[tokio::test]
+async fn a_verifiable_receipt_gets_the_narrow_script_policy_and_the_verifier_markup() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    assert!(store.insert_receipt(
+        "slv_verify".to_string(),
+        verifiable_receipt(json!({"request": {"counterparty_id": "a"}, "ruleset_version": 2}))
+    ));
+    let (status, headers, html) = send(&router, "/receipt/slv_verify").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_hardened(&headers);
+    let csp = header(&headers, "content-security-policy");
+    assert_eq!(csp, CSP_RECEIPT_VERIFY);
+    assert_eq!(
+        csp.replacen("script-src 'self'; ", "", 1),
+        CSP_NO_SCRIPT,
+        "the only difference from the script-free policy is script-src 'self'"
+    );
+    assert_only_our_markup(&html);
+
+    for marker in [
+        "id=\"verify-slot\"",
+        "id=\"canonical-evidence\" hidden",
+        "id=\"evidence-hash\"",
+    ] {
+        assert_eq!(html.matches(marker).count(), 1, "{marker}");
+    }
+
+    // The tag's version is the content hash of the bytes the server serves.
+    let (status, asset_headers, js) = send(&router, "/static/receipt-verify.js").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(header(&asset_headers, "content-type").starts_with("text/javascript"));
+    assert_eq!(header(&asset_headers, "x-content-type-options"), "nosniff");
+    let version = &solv::receipt::sha256_hex(js.as_bytes())[..16];
+    assert!(
+        html.contains(&format!(
+            "<script src=\"/static/receipt-verify.js?v={version}\"></script>"
+        )),
+        "script tag must carry the content version"
+    );
+}
+
+#[tokio::test]
+async fn receipts_with_nothing_to_verify_keep_the_script_free_policy() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let mut partial = verifiable_receipt(Value::Null);
+    partial.response = Value::Null;
+    let mut no_hash = verifiable_receipt(json!({"request": {}}));
+    no_hash.evidence_sha256 = String::new();
+    assert!(store.insert_receipt("slv_partial".to_string(), partial));
+    assert!(store.insert_receipt("slv_nohash".to_string(), no_hash));
+    for uri in [
+        "/receipt/slv_partial",
+        "/receipt/slv_nohash",
+        "/receipt/missing",
+    ] {
+        let (_, headers, html) = send(&router, uri).await;
+        assert_eq!(
+            header(&headers, "content-security-policy"),
+            CSP_NO_SCRIPT,
+            "{uri}"
+        );
+        assert!(!html.contains("<script"), "{uri}");
+        assert!(!html.contains("canonical-evidence"), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn the_embedded_text_is_exactly_the_hashed_bytes_even_with_hostile_characters() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    // Raw bidi/zero-width/C1/line-separator characters stay raw in canonical
+    // JSON (ensure_ascii=False); markup, entity look-alikes, quote characters,
+    // a literal `[U+202E]`, and floats Python writes differently from
+    // JSON.stringify all have to survive the trip into the page unchanged.
+    let evidence = json!({
+        "request": {
+            "counterparty_id": "<script>alert(1)</script>\u{202E}pay\u{202C}\u{200B}\u{FEFF}\u{2028}\u{0085}",
+            "target_url": "https://x.example/?a=1&b=<b>\"q\"'s`t`",
+            "note": "&lt;already&gt; [U+202E] \\u202e é 日本 😀"
+        },
+        "numbers": [1.0, 1e-7, 1e22, 0.1, 100, -0.0],
+        "ruleset_version": 2
+    });
+    let receipt = verifiable_receipt(evidence.clone());
+    let expected_hash = receipt.evidence_sha256.clone();
+    assert!(store.insert_receipt("slv_exact".to_string(), receipt));
+    let (_, headers, html) = send(&router, "/receipt/slv_exact").await;
+    assert_hardened(&headers);
+    assert_only_our_markup(&html);
+
+    let block = embedded_canonical(&html);
+    assert!(
+        !block.contains('<'),
+        "no raw markup inside the hashed block"
+    );
+    let decoded = decode_exact_entities(block);
+    assert_eq!(decoded, solv::receipt::canonical_json(&evidence));
+    assert!(
+        decoded.contains("1.0") && decoded.contains("1e-07"),
+        "Python float forms"
+    );
+    assert!(
+        decoded.contains('\u{202E}'),
+        "the raw bidi character is preserved"
+    );
+    assert_eq!(solv::receipt::sha256_hex(decoded.as_bytes()), expected_hash);
+    assert_eq!(printed_hash(&html), expected_hash);
+
+    // The visible parts of the page still show the invisible characters as
+    // markers; only the hidden block carries them raw.
+    let visible = html.replace(block, "");
+    assert!(
+        !visible.contains('\u{202E}'),
+        "no raw bidi outside the hidden block"
+    );
+}
+
+#[tokio::test]
+async fn no_inline_script_and_no_event_handler_can_appear_on_a_receipt_page() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let m = "\"><script>alert(1)</script><img src=x onerror=alert(2)><svg onload=alert(3)>";
+    let evidence =
+        json!({"request": {"counterparty_id": m, "target_url": m}, "ruleset_version": 2});
+    let mut receipt = verifiable_receipt(evidence);
+    receipt.response = json!({
+        "decision": m, "tier": m, "reasons": [{"code": m, "severity": m, "effect": m,
+            "message": m, "evidence": {"source": m, "field": m, "quote": m, "locator": m}}]
+    });
+    assert!(store.insert_receipt("slv_nohandlers".to_string(), receipt));
+    let (_, headers, html) = send(&router, "/receipt/slv_nohandlers").await;
+    assert_hardened(&headers);
+    assert_only_our_markup(&html);
+    assert_eq!(
+        html.matches("<script").count(),
+        1,
+        "exactly one script tag: the verifier asset"
+    );
+    assert_eq!(html.matches("</script>").count(), 1);
+    assert!(
+        !html.contains("<img") && !html.contains("<svg onload") && !html.contains("<script>"),
+        "hostile markup stayed text"
+    );
+    // Every tag, not only the ones the checker names, is free of handlers
+    // and script URLs.
+    let mut rest = html.as_str();
+    while let Some(at) = rest.find('<') {
+        let tag = &rest[at + 1..];
+        let end = tag.find('>').unwrap();
+        let inner = tag[..end].to_ascii_lowercase();
+        assert!(
+            !inner
+                .split_whitespace()
+                .skip(1)
+                .any(|t| t.starts_with("on")),
+            "event handler in <{inner}>"
+        );
+        assert!(!inner.contains("javascript:"), "script URL in <{inner}>");
+        rest = &tag[end + 1..];
+    }
+}
+
+#[tokio::test]
+async fn the_verifier_script_makes_no_request_and_builds_no_markup() {
+    let (router, _store, _dir) =
+        build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let (status, headers, js) = send(&router, "/static/receipt-verify.js").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        header(&headers, "content-security-policy"),
+        "default-src 'none'; script-src 'self'"
+    );
+    for forbidden in [
+        "eval(",
+        "Function(",
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "fetch(",
+        "XMLHttpRequest",
+        "WebSocket",
+        "sendBeacon",
+        "import(",
+        "importScripts",
+        "location",
+        "http://",
+        "https://",
+    ] {
+        assert!(
+            !js.contains(forbidden),
+            "verifier script must not use {forbidden}"
+        );
+    }
+    assert!(js.contains("crypto.subtle") && js.contains("SHA-256"));
 }
