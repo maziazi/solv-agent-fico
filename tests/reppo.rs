@@ -1,9 +1,9 @@
-//! Reppo client tests (docs/SPEC.md §5.3) — all offline: the submit body
-//! against the documented shape, status parsing (including every case where
-//! a score must be refused rather than guessed), and the real client driven
-//! against a localhost server. The one live test is `#[ignore]`d per
-//! AGENTS.md; it spends Reppo's non-renewable quota and needs the project
-//! owner's approval.
+//! Reppo Eval Router client tests (docs/SPEC.md §5.3, migrated 2026-11-15 to
+//! the Eval Router API) — all offline: the submit body against the
+//! documented shape, status parsing (including every case where a score
+//! must be refused rather than guessed), and the real client driven against
+//! a localhost server. The one live test is `#[ignore]`d per AGENTS.md; it
+//! spends Reppo credits and needs the project owner's approval.
 
 use std::time::Duration;
 
@@ -12,20 +12,16 @@ use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use serde_json::{Value, json};
-use solv::bureau::{AuditRequest, Bureau, BureauConfig, JobStatus};
 use solv::reppo::{
-    ALLOWED_SETTLEMENT_MINUTES, CREDITS_PER_EVAL, EvalStatus, EvalSubmission, MAX_BODY_BYTES,
-    MAX_PAYLOAD_BYTES, PILLAR_CRITERIA, ReppoClient, ReppoError, ReppoHttpClient, SubmissionError,
-    parse_rfc3339_unix, parse_status_response, parse_submit_response, sanitize_untrusted,
+    CREDITS_PER_EVAL, Confidence, EvalStatus, EvalSubmission, MAX_BODY_BYTES, MAX_INPUT_BYTES,
+    ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
+    parse_status_response, sanitize_untrusted,
 };
-use solv::score::Pillars;
-use solv::state::Store;
 
 fn submission() -> EvalSubmission {
     EvalSubmission::new(
-        r#"{"counterparty_name":"DataFeed Pro"}"#.to_string(),
-        Some("fixed context".to_string()),
-        10,
+        "Claim to fact-check, submitted by Solv.\n\nClaim: \"real-time market data, SLA 99.9%.\""
+            .to_string(),
     )
     .unwrap()
 }
@@ -33,186 +29,190 @@ fn submission() -> EvalSubmission {
 #[test]
 fn submit_body_matches_the_documented_shape() {
     let body = submission().to_body();
-    assert_eq!(body["type"], "artifact");
-    assert_eq!(body["settlementMinutes"], 10);
-    assert_eq!(body["context"], "fixed context");
-    assert_eq!(body["payload"], r#"{"counterparty_name":"DataFeed Pro"}"#);
+    assert_eq!(body["taskType"], "claim");
+    assert_eq!(
+        body["input"],
+        "Claim to fact-check, submitted by Solv.\n\nClaim: \"real-time market data, SLA 99.9%.\""
+    );
 
-    // SPEC §4.1: the four pillar questions, in the order that maps the
-    // returned scores back onto reliability/track record/safety/maturity.
-    let criteria = body["criteria"].as_array().unwrap();
-    assert_eq!(criteria.len(), 4);
-    for (sent, expected) in criteria.iter().zip(PILLAR_CRITERIA) {
-        assert_eq!(sent, expected);
-        assert!(expected.len() <= 2 * 1024, "criteria are at most 2 KB each");
-    }
-    assert!(criteria[2].as_str().unwrap().contains("buying agent"));
+    // The Eval Router body carries nothing else: no criteria, no settlement
+    // window, no context field (the context travels inside the input text).
+    assert_eq!(body.as_object().unwrap().len(), 2);
 }
 
 #[test]
 fn submission_limits_are_enforced_locally() {
     assert_eq!(
-        EvalSubmission::new(String::new(), None, 10),
-        Err(SubmissionError::EmptyPayload)
+        EvalSubmission::new(String::new()),
+        Err(SubmissionError::EmptyInput)
     );
     assert_eq!(
-        EvalSubmission::new("x".repeat(MAX_PAYLOAD_BYTES + 1), None, 10),
-        Err(SubmissionError::PayloadTooLarge(MAX_PAYLOAD_BYTES + 1))
+        EvalSubmission::new("x".repeat(MAX_INPUT_BYTES + 1)),
+        Err(SubmissionError::InputTooLarge(MAX_INPUT_BYTES + 1))
     );
-    assert!(EvalSubmission::new("x".repeat(MAX_PAYLOAD_BYTES), None, 10).is_ok());
-    assert!(matches!(
-        EvalSubmission::new("p".to_string(), Some("c".repeat(32 * 1024 + 1)), 10),
-        Err(SubmissionError::ContextTooLarge(_))
-    ));
-    // SPEC §5.3: the minimum settlement window is 10 minutes.
-    for minutes in [0, 1, 5, 9, 11, 45, 1441] {
-        assert_eq!(
-            EvalSubmission::new("p".to_string(), None, minutes),
-            Err(SubmissionError::BadSettlementMinutes(minutes))
-        );
-    }
-    for minutes in ALLOWED_SETTLEMENT_MINUTES {
-        assert!(EvalSubmission::new("p".to_string(), None, minutes).is_ok());
-    }
+    assert!(EvalSubmission::new("x".repeat(MAX_INPUT_BYTES)).is_ok());
 }
 
-fn settled_body(score: Value, verdict_scores: [f64; 4]) -> Value {
-    let verdicts: Vec<Value> = PILLAR_CRITERIA
-        .iter()
-        .zip(verdict_scores)
-        .map(|(criterion, score)| {
-            json!({ "criterion": criterion, "score": score, "critique": "because" })
-        })
-        .collect();
+/// A COMPLETED evaluation in the Eval Router's shape. `rubric` is the
+/// scorecard Reppo picked; every value may be 0–10 or 0–100 (both are
+/// accepted and normalised, per the migrating design note).
+fn completed_body(score: Value, rubric: Value) -> Value {
     json!({
-        "evalId": "ev_1",
-        "status": "SETTLED",
-        "creditsCharged": 100,
-        "settledAt": "2026-10-14T17:18:42.000Z",
+        "id": "ev_1",
+        "taskType": "claim",
+        "status": "COMPLETED",
+        "score": score,
+        "route": "review",
+        "creditsCharged": CREDITS_PER_EVAL,
+        "completedAt": "2026-10-14T17:18:42.000Z",
         "result": {
-            "verdict": { "score": score, "scale": "0-100", "decision": "revise", "confidence": "high" },
-            "verdicts": verdicts,
-            "action": { "route": "review" },
-            "evidence": { "evidenceBasis": "model-judgment", "pods": [], "peerAssessmentCount": 2 }
+            "score": score,
+            "decision": "reject",
+            "confidence": "high",
+            "route": "review",
+            "reason": "The claim is not supported by verifiable evidence.",
+            "rubric_scores": rubric,
         }
     })
 }
 
 #[test]
-fn a_settled_evaluation_parses_into_a_validated_score() {
-    let status = parse_status_response(&settled_body(json!(78), [7.0, 8.0, 9.0, 6.0])).unwrap();
+fn a_completed_evaluation_parses_into_a_validated_score() {
+    let status = parse_status_response(&completed_body(
+        json!(78),
+        json!({
+            "reliability": 7, "track_record": 8, "safety": 9, "maturity": 6
+        }),
+    ))
+    .unwrap();
     let EvalStatus::Settled(settled) = status else {
         panic!("expected Settled, got {status:?}");
     };
     assert_eq!(settled.reppo_score, 78.0);
     assert_eq!(settled.settled_at_unix, Some(1_791_998_322));
-    assert_eq!(settled.credits_charged, 100);
+    assert_eq!(settled.credits_charged, CREDITS_PER_EVAL);
     assert_eq!(settled.route.as_deref(), Some("review"));
+    // Keyword mapping: the dimensions Reppo chose cover all four pillars.
     assert_eq!(
         settled.pillars,
-        Pillars {
+        solv::score::Pillars {
             reliability: 7,
             track_record: 8,
             safety: 9,
-            maturity: 6,
+            maturity: 6
         }
     );
+    // Distillation input: one verdict entry per scored dimension (the
+    // object order is the map's, so assert the set of criteria).
     assert_eq!(settled.verdicts.len(), 4);
-    assert_eq!(settled.verdicts[2].critique, "because");
-}
-
-#[test]
-fn pillars_follow_criterion_text_not_array_position() {
-    let mut body = settled_body(json!(60), [1.0, 2.0, 3.0, 4.0]);
-    body["result"]["verdicts"].as_array_mut().unwrap().reverse();
-    let EvalStatus::Settled(settled) = parse_status_response(&body).unwrap() else {
-        panic!("expected Settled");
-    };
-    assert_eq!(settled.pillars.reliability, 1);
+    let mut criteria: Vec<&str> = settled
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.criterion.as_str())
+        .collect();
+    criteria.sort_unstable();
     assert_eq!(
-        settled.pillars.safety, 3,
-        "safety is whichever carries its question"
+        criteria,
+        ["maturity", "reliability", "safety", "track_record"]
     );
-    assert_eq!(settled.pillars.maturity, 4);
 }
 
 #[test]
-fn reworded_criteria_fall_back_to_order_only_when_there_are_exactly_four() {
-    let mut body = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
-    for entry in body["result"]["verdicts"].as_array_mut().unwrap() {
-        entry["criterion"] = json!("reworded by reppo");
-    }
-    let EvalStatus::Settled(settled) = parse_status_response(&body).unwrap() else {
+fn rubric_values_on_a_hundred_point_scale_are_normalised_down() {
+    let status = parse_status_response(&completed_body(
+        json!(64),
+        json!({
+            "reliability": 70, "track_record": 85, "safety": 30, "maturity": 60
+        }),
+    ))
+    .unwrap();
+    let EvalStatus::Settled(settled) = status else {
         panic!("expected Settled");
     };
-    assert_eq!(settled.pillars.safety, 2);
-
-    // Three verdicts cannot be attributed to four pillars: refuse.
-    body["result"]["verdicts"].as_array_mut().unwrap().pop();
-    assert!(matches!(
-        parse_status_response(&body),
-        Err(ReppoError::Parse(_))
-    ));
+    // Floored toward the safe side: the Safety gate must not be passed by
+    // rounding.
+    assert_eq!(
+        settled.pillars,
+        solv::score::Pillars {
+            reliability: 7,
+            track_record: 8,
+            safety: 3,
+            maturity: 6
+        }
+    );
 }
 
 #[test]
-fn fractional_pillar_scores_floor_toward_the_safe_side() {
-    // A safety score of 3.5 must not become 4 and slip past the <= 3
-    // hard gate (SPEC §5.4).
-    let EvalStatus::Settled(settled) =
-        parse_status_response(&settled_body(json!(50), [7.9, 8.0, 3.5, 6.0])).unwrap()
-    else {
+fn uncovered_pillars_default_to_the_middle_of_the_scale() {
+    // The Eval Router picks its own dimensions; a submission whose
+    // scorecard covers none of our keywords gets the neutral default —
+    // never a zero that reads as an accusation or a ten that reads as an
+    // endorsement.
+    let status = parse_status_response(&completed_body(
+        json!(55),
+        json!({
+            "clarity": 8, "format": 9
+        }),
+    ))
+    .unwrap();
+    let EvalStatus::Settled(settled) = status else {
         panic!("expected Settled");
     };
-    assert_eq!(settled.pillars.safety, 3);
-    assert_eq!(settled.pillars.reliability, 7);
+    assert_eq!(
+        settled.pillars,
+        solv::score::Pillars {
+            reliability: 5,
+            track_record: 5,
+            safety: 5,
+            maturity: 5
+        }
+    );
 }
 
 #[test]
 fn out_of_range_or_missing_scores_are_refused_not_clamped() {
-    for bad in [json!(100.5), json!(-1), json!("78"), Value::Null] {
-        assert!(
-            matches!(
-                parse_status_response(&settled_body(bad.clone(), [7.0, 8.0, 9.0, 6.0])),
-                Err(ReppoError::Parse(_))
-            ),
-            "verdict.score {bad} must be refused"
-        );
-    }
-    for bad in [10.5, -0.5, f64::INFINITY] {
-        // serde_json cannot carry NaN/inf, so a non-finite score arrives as null.
-        let body = settled_body(json!(50), [bad, 8.0, 9.0, 6.0]);
-        assert!(
-            matches!(parse_status_response(&body), Err(ReppoError::Parse(_))),
-            "pillar score {bad} must be refused"
-        );
-    }
-    let mut no_result = settled_body(json!(50), [7.0, 8.0, 9.0, 6.0]);
-    no_result["result"] = Value::Null;
+    // A COMPLETED evaluation whose headline score is out of range is
+    // refused: a clamped number would sit on a public receipt.
     assert!(matches!(
-        parse_status_response(&no_result),
+        parse_status_response(&completed_body(json!(101), json!({}))),
         Err(ReppoError::Parse(_))
     ));
+    assert!(matches!(
+        parse_status_response(&completed_body(json!(-1), json!({}))),
+        Err(ReppoError::Parse(_))
+    ));
+    // A scorecard value outside both scales simply contributes nothing.
+    let status = parse_status_response(&completed_body(
+        json!(60),
+        json!({
+            "clarity": 8, "nonsense": 250
+        }),
+    ))
+    .unwrap();
+    let EvalStatus::Settled(settled) = status else {
+        panic!("expected Settled");
+    };
+    assert_eq!(settled.pillars.reliability, 5);
+    assert_eq!(settled.verdicts.len(), 1, "the nonsense value is dropped");
 }
 
 #[test]
 fn the_other_statuses_parse() {
     assert_eq!(
-        parse_status_response(&json!({ "status": "PENDING", "result": null })).unwrap(),
+        parse_status_response(&json!({ "status": "QUEUED", "result": null })).unwrap(),
         EvalStatus::Pending
     );
     assert_eq!(
-        parse_status_response(&json!({ "status": "FAILED", "result": { "reason": "no quorum" } }))
-            .unwrap(),
-        EvalStatus::Failed(Some("no quorum".to_string()))
+        parse_status_response(&json!({ "status": "PROCESSING" })).unwrap(),
+        EvalStatus::Pending
     );
     assert_eq!(
-        parse_status_response(&json!({ "status": "FAILED", "result": null })).unwrap(),
+        parse_status_response(&json!({ "status": "FAILED", "error": "could not queue" })).unwrap(),
+        EvalStatus::Failed(Some("could not queue".to_string()))
+    );
+    assert_eq!(
+        parse_status_response(&json!({ "status": "FAILED", "error": null })).unwrap(),
         EvalStatus::Failed(None)
-    );
-    assert_eq!(
-        parse_status_response(&json!({ "status": "DENIED" })).unwrap(),
-        EvalStatus::Denied
     );
     assert!(matches!(
         parse_status_response(&json!({ "status": "MAYBE" })),
@@ -248,21 +248,27 @@ fn authorised(headers: &HeaderMap) -> bool {
 async fn real_client_submits_and_reads_over_http() {
     let app = axum::Router::new()
         .route(
-            "/agents/eval-requests/submit",
+            "/agents/evals",
             post(|headers: HeaderMap, Json(body): Json<Value>| async move {
                 if !authorised(&headers) {
                     return (StatusCode::UNAUTHORIZED, Json(json!({})));
                 }
-                assert_eq!(body["type"], "artifact");
-                assert_eq!(body["criteria"].as_array().unwrap().len(), 4);
+                assert_eq!(body["taskType"], "claim");
+                assert!(body["input"].as_str().unwrap().contains("Claim"));
+                assert!(body.as_object().unwrap().len() <= 3);
                 (
                     StatusCode::CREATED,
-                    Json(json!({ "id": "internal", "evalId": "ev_77", "status": "PENDING" })),
+                    Json(json!({
+                        "id": "ev_77",
+                        "taskType": "claim",
+                        "status": "QUEUED",
+                        "creditsCharged": 0
+                    })),
                 )
             }),
         )
         .route(
-            "/agents/eval-requests/{eval_id}",
+            "/agents/evals/{eval_id}",
             get(
                 |headers: HeaderMap, Path(eval_id): Path<String>| async move {
                     if !authorised(&headers) {
@@ -271,67 +277,104 @@ async fn real_client_submits_and_reads_over_http() {
                     assert_eq!(eval_id, "ev_77");
                     (
                         StatusCode::OK,
-                        Json(settled_body(json!(78), [7.0, 8.0, 9.0, 6.0])),
+                        Json(json!({
+                            "id": "ev_77",
+                            "status": "COMPLETED",
+                            "score": 64,
+                            "route": "review",
+                            "creditsCharged": CREDITS_PER_EVAL,
+                            "result": { "score": 64, "decision": "reject", "reason": "unsupported" }
+                        })),
                     )
                 },
             ),
         );
     let (base, _server) = reppo_server(app).await;
-    let reppo = client(base);
-
-    let eval_id = reppo.submit(&submission()).await.unwrap();
-    assert_eq!(
-        eval_id, "ev_77",
-        "the evalId is used, never the internal id"
-    );
-    let status = reppo.status(&eval_id).await.unwrap();
-    assert!(matches!(status, EvalStatus::Settled(_)));
+    let eval_id = client(base.clone()).submit(&submission()).await.unwrap();
+    assert_eq!(eval_id, "ev_77");
+    let status = client(base).status("ev_77").await.unwrap();
+    let EvalStatus::Settled(settled) = status else {
+        panic!("expected Settled");
+    };
+    assert_eq!(settled.reppo_score, 64.0);
+    assert_eq!(settled.route.as_deref(), Some("review"));
 }
 
 #[tokio::test]
 async fn real_client_maps_http_statuses_to_distinct_errors() {
-    for code in [401u16, 402, 409, 500] {
+    for (status, expected) in [
+        (StatusCode::UNAUTHORIZED, "rejected the API key"),
+        (StatusCode::PAYMENT_REQUIRED, "insufficient credits"),
+        (StatusCode::NOT_FOUND, "evaluation not found"),
+        (StatusCode::BAD_GATEWAY, "returned status 502"),
+    ] {
         let app = axum::Router::new().route(
-            "/agents/eval-requests/submit",
-            post(move || async move { StatusCode::from_u16(code).unwrap() }),
+            "/agents/evals",
+            post(move || async move { (status, Json(json!({}))) }),
         );
         let (base, _server) = reppo_server(app).await;
         let error = client(base).submit(&submission()).await.unwrap_err();
-        let matched = match code {
-            401 => matches!(error, ReppoError::Unauthorized),
-            402 => matches!(error, ReppoError::InsufficientCredits),
-            409 => matches!(error, ReppoError::PendingConflict),
-            _ => matches!(error, ReppoError::Status(500)),
-        };
-        assert!(matched, "HTTP {code} mapped to {error:?}");
+        assert!(error.to_string().contains(expected), "{error}");
     }
-
-    let app = axum::Router::new().route(
-        "/agents/eval-requests/{eval_id}",
-        get(|| async { StatusCode::NOT_FOUND }),
-    );
-    let (base, _server) = reppo_server(app).await;
-    assert!(matches!(
-        client(base).status("ev_other").await,
-        Err(ReppoError::NotFound)
-    ));
 }
 
 #[tokio::test]
-async fn real_client_rejects_a_submit_response_without_an_eval_id() {
+async fn real_client_rejects_a_submit_response_without_an_id() {
     let app = axum::Router::new().route(
-        "/agents/eval-requests/submit",
-        post(|| async { (StatusCode::CREATED, Json(json!({ "id": "internal-only" }))) }),
+        "/agents/evals",
+        post(|| async { (StatusCode::CREATED, Json(json!({ "status": "QUEUED" }))) }),
     );
     let (base, _server) = reppo_server(app).await;
-    assert!(matches!(
-        client(base).submit(&submission()).await,
-        Err(ReppoError::Parse(_))
-    ));
+    let ReppoError::Parse(message) = client(base).submit(&submission()).await.unwrap_err() else {
+        panic!("expected Parse");
+    };
+    assert!(
+        message.contains("id missing") && message.contains("\"status\":\"QUEUED\""),
+        "{message}"
+    );
 }
 
-#[test]
-fn rfc3339_overflowing_input_is_none_and_never_panics() {
+#[tokio::test]
+async fn an_unreadable_submit_body_is_logged_sanitized_so_the_id_can_be_recovered() {
+    // Control characters first, then a recoverable id buried in a body that
+    // is not the documented shape, then a long tail.
+    let noisy = format!(
+        "\u{7}\u{1b}[2J{{\"data\": {{\"idTypo\": \"ev_recover_me\"}}}}{}",
+        "z".repeat(5_000)
+    );
+    let app = axum::Router::new().route(
+        "/agents/evals",
+        post(move || {
+            let body = noisy.clone();
+            async move { (StatusCode::CREATED, body) }
+        }),
+    );
+    let (base, _server) = reppo_server(app).await;
+    let error = client(base).submit(&submission()).await.unwrap_err();
+    let ReppoError::Parse(message) = error else {
+        panic!("expected Parse, got {error:?}");
+    };
+    assert!(message.contains("ev_recover_me"), "{message}");
+    assert!(
+        !message.chars().any(char::is_control),
+        "no control characters survive: {message:?}"
+    );
+    assert!(message.chars().count() < 400, "bounded: {}", message.len());
+
+    // Valid JSON that lacks `id` gets the same treatment.
+    let app = axum::Router::new().route(
+        "/agents/evals",
+        post(|| async { (StatusCode::CREATED, Json(json!({ "evalId": "old-name" }))) }),
+    );
+    let (base, _server) = reppo_server(app).await;
+    let ReppoError::Parse(message) = client(base).submit(&submission()).await.unwrap_err() else {
+        panic!("expected Parse");
+    };
+    assert!(message.contains("id missing"), "{message}");
+    assert!(message.contains("old-name"), "{message}");
+}
+
+fn rfc3339_overflowing_input_is_none_and_never_panics_body() {
     // Each of these used to overflow i64 arithmetic: a panic in a debug
     // build, silent wraparound in release.
     for hostile in [
@@ -346,6 +389,11 @@ fn rfc3339_overflowing_input_is_none_and_never_panics() {
     ] {
         assert_eq!(parse_rfc3339_unix(hostile), None, "{hostile}");
     }
+}
+
+#[test]
+fn rfc3339_overflowing_input_is_none_and_never_panics() {
+    rfc3339_overflowing_input_is_none_and_never_panics_body();
 }
 
 #[test]
@@ -416,136 +464,20 @@ fn untrusted_text_loses_control_characters_and_is_bounded() {
 }
 
 #[tokio::test]
-async fn an_unreadable_submit_body_is_logged_sanitized_so_the_eval_id_can_be_recovered() {
-    // Control characters first, then a recoverable id buried in a body that
-    // is not the documented shape, then a long tail.
-    let noisy = format!(
-        "\u{7}\u{1b}[2J{{\"data\": {{\"evalIdTypo\": \"ev_recover_me\"}}}}{}",
-        "z".repeat(5_000)
-    );
+async fn an_unreadable_status_body_is_refused() {
     let app = axum::Router::new().route(
-        "/agents/eval-requests/submit",
-        post(move || {
-            let body = noisy.clone();
-            async move { (StatusCode::CREATED, body) }
-        }),
+        "/agents/evals/{eval_id}",
+        get(|| async { (StatusCode::OK, "<html>not json</html>") }),
     );
     let (base, _server) = reppo_server(app).await;
-    let error = client(base).submit(&submission()).await.unwrap_err();
-    let ReppoError::Parse(message) = error else {
-        panic!("expected Parse, got {error:?}");
-    };
-    assert!(message.contains("ev_recover_me"), "{message}");
-    assert!(
-        !message.chars().any(char::is_control),
-        "no control characters survive: {message:?}"
-    );
-    assert!(message.chars().count() < 400, "bounded: {}", message.len());
-
-    // Valid JSON that lacks `evalId` gets the same treatment.
-    let app = axum::Router::new().route(
-        "/agents/eval-requests/submit",
-        post(|| async {
-            (
-                StatusCode::CREATED,
-                Json(json!({ "id": "internal-only", "note": "ev_in_other_field" })),
-            )
-        }),
-    );
-    let (base, _server) = reppo_server(app).await;
-    let ReppoError::Parse(message) = client(base).submit(&submission()).await.unwrap_err() else {
-        panic!("expected Parse");
-    };
-    assert!(message.contains("evalId missing"), "{message}");
-    assert!(message.contains("ev_in_other_field"), "{message}");
-}
-
-#[test]
-fn the_client_only_loads_when_a_key_exists_and_the_operator_enabled_it() {
-    // A key sitting in `.env` must not by itself let the service spend
-    // non-renewable credits: the operator opts in with SOLV_REPPO_ENABLED=1.
-    assert!(ReppoHttpClient::from_vars(Some("a-key"), Some("1")).is_some());
-    for not_enabled in [
-        None,
-        Some(""),
-        Some("0"),
-        Some("true"),
-        Some("yes"),
-        Some(" 1"),
-    ] {
-        assert!(
-            ReppoHttpClient::from_vars(Some("a-key"), not_enabled).is_none(),
-            "enabled flag {not_enabled:?} must not enable Reppo"
-        );
-    }
-    for no_key in [None, Some(""), Some("   ")] {
-        assert!(
-            ReppoHttpClient::from_vars(no_key, Some("1")).is_none(),
-            "key {no_key:?} must not load"
-        );
-    }
-}
-
-#[test]
-fn reason_critique_and_criterion_are_sanitized_when_parsed() {
-    let hostile = format!("\u{1b}[31mFORGED\n{}", "x".repeat(5_000));
-
-    let EvalStatus::Failed(Some(reason)) = parse_status_response(&json!({
-        "status": "FAILED",
-        "result": { "reason": hostile }
-    }))
-    .unwrap() else {
-        panic!("expected Failed with a reason");
-    };
-    assert!(!reason.chars().any(char::is_control), "{reason:?}");
-    assert_eq!(reason.chars().count(), 200);
-
-    let mut body = settled_body(json!(60), [5.0, 6.0, 7.0, 8.0]);
-    body["result"]["verdicts"][0]["critique"] = json!(hostile);
-    body["result"]["verdicts"][1]["criterion"] = json!(format!("{}\n", PILLAR_CRITERIA[1]));
-    let EvalStatus::Settled(settled) = parse_status_response(&body).unwrap() else {
-        panic!("expected Settled");
-    };
-    let critique = &settled.verdicts[0].critique;
-    assert!(!critique.chars().any(char::is_control));
-    assert_eq!(critique.chars().count(), 1_000);
-    assert_eq!(
-        settled.verdicts[1].criterion, PILLAR_CRITERIA[1],
-        "a stray newline does not stop a criterion from matching its pillar"
-    );
-    assert_eq!(settled.pillars.track_record, 6);
-}
-
-#[test]
-fn an_eval_id_that_is_not_a_plain_identifier_is_refused() {
-    assert_eq!(
-        parse_submit_response(&json!({ "evalId": "ev_abc-123" })).unwrap(),
-        "ev_abc-123"
-    );
-    for bad in [
-        "ev_1\nFORGED LOG LINE".to_string(),
-        "ev_1\u{1b}[31m".to_string(),
-        "e".repeat(201),
-        "ev_1\u{202e}".to_string(),
-    ] {
-        assert!(
-            matches!(
-                parse_submit_response(&json!({ "evalId": bad })),
-                Err(ReppoError::Parse(_))
-            ),
-            "{bad:?} must be refused, not sanitized into a different id"
-        );
-    }
-    assert_eq!(
-        parse_submit_response(&json!({ "evalId": "e".repeat(200) }))
-            .unwrap()
-            .len(),
-        200
-    );
+    assert!(matches!(
+        client(base).status("ev_1").await,
+        Err(ReppoError::Parse(_))
+    ));
 }
 
 fn padded_pending_body(total_bytes: usize) -> String {
-    let core = r#"{"status":"PENDING"}"#;
+    let core = r#"{"status":"QUEUED"}"#;
     format!("{core}{}", " ".repeat(total_bytes - core.len()))
 }
 
@@ -555,7 +487,7 @@ async fn a_response_body_over_one_mebibyte_is_refused_but_exactly_one_is_read() 
     let over_limit = padded_pending_body(MAX_BODY_BYTES + 1);
     for (body, accepted) in [(at_limit, true), (over_limit, false)] {
         let app = axum::Router::new().route(
-            "/agents/eval-requests/{eval_id}",
+            "/agents/evals/{eval_id}",
             get(move || {
                 let body = body.clone();
                 async move { (StatusCode::OK, body) }
@@ -577,7 +509,7 @@ async fn a_response_body_over_one_mebibyte_is_refused_but_exactly_one_is_read() 
 #[tokio::test]
 async fn an_oversize_submit_response_is_refused_too() {
     let app = axum::Router::new().route(
-        "/agents/eval-requests/submit",
+        "/agents/evals",
         post(|| async { (StatusCode::CREATED, "z".repeat(MAX_BODY_BYTES + 1)) }),
     );
     let (base, _server) = reppo_server(app).await;
@@ -639,117 +571,110 @@ async fn a_chunked_body_without_a_length_is_cut_off_at_the_limit() {
 }
 
 #[test]
-fn a_partial_criterion_match_is_refused_not_completed_by_position() {
-    // Position is a last resort for a response that reworded *every*
-    // criterion. When some match and others do not, guessing the rest by
-    // position could hand the Safety score to the wrong question.
-    let mut one_reworded = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
-    one_reworded["result"]["verdicts"][2]["criterion"] = json!("reworded by reppo");
-    assert!(matches!(
-        parse_status_response(&one_reworded),
-        Err(ReppoError::Parse(_))
-    ));
-
-    // Four verdicts, but two share a criterion and another question has no
-    // answer: three distinct matches, not four.
-    let mut duplicated = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
-    duplicated["result"]["verdicts"][3]["criterion"] = json!(PILLAR_CRITERIA[0]);
-    assert!(matches!(
-        parse_status_response(&duplicated),
-        Err(ReppoError::Parse(_))
-    ));
-
-    // An extra verdict beside four matching ones is harmless.
-    let mut extra = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
-    extra["result"]["verdicts"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({ "criterion": "something Reppo added", "score": 1, "critique": "" }));
-    let EvalStatus::Settled(settled) = parse_status_response(&extra).unwrap() else {
-        panic!("expected Settled");
-    };
-    assert_eq!(settled.pillars.safety, 2);
+fn the_client_only_loads_when_a_key_exists_and_the_operator_enabled_it() {
+    // A key sitting in `.env` must not by itself let the service spend
+    // credits: the operator opts in with SOLV_REPPO_ENABLED=1 and sets an
+    // explicit credit budget (SOLV_REPPO_STARTING_CREDITS).
+    assert!(ReppoHttpClient::from_vars(Some("a-key"), Some("1")).is_some());
+    for not_enabled in [
+        None,
+        Some(""),
+        Some("0"),
+        Some("true"),
+        Some("yes"),
+        Some(" 1"),
+    ] {
+        assert!(
+            ReppoHttpClient::from_vars(Some("a-key"), not_enabled).is_none(),
+            "enabled flag {not_enabled:?} must not enable Reppo"
+        );
+    }
+    for no_key in [None, Some(""), Some("   ")] {
+        assert!(
+            ReppoHttpClient::from_vars(no_key, Some("1")).is_none(),
+            "key {no_key:?} must not load"
+        );
+    }
 }
 
-/// Hits the real Reppo Evaluation API through the whole worker path:
-/// enqueue, submit, wait out the 10-minute window, poll to `SETTLED`, and
-/// confirm the profile gained a score. Never runs in `cargo test`.
-///
-/// **This spends 100 of the 1,000 non-renewable free credits and takes at
-/// least ten minutes.** `#[ignore]` alone is not enough protection:
-/// AGENTS.md names `cargo test -- --ignored` as the general "run the network
-/// tests" command, and that must never burn Reppo quota by accident. So even
-/// when selected, the test does nothing unless `REPPO_LIVE_OK=1` is set in
-/// the real environment of that command (it is checked *before* `.env` is
-/// read, so a file cannot arm it permanently). Run it only with the project
-/// owner's approval, with `REPPO_API_KEY` in a local `.env`:
-///
-/// ```sh
-/// REPPO_LIVE_OK=1 cargo test --test reppo live_reppo -- --ignored --nocapture
-/// ```
-#[tokio::test]
-#[ignore = "spends 100 real Reppo credits (non-renewable) and takes 10+ minutes; also needs REPPO_LIVE_OK=1, REPPO_API_KEY and owner approval"]
-async fn live_reppo_evaluation_settles_and_updates_a_profile() {
-    if std::env::var("REPPO_LIVE_OK").as_deref() != Ok("1") {
-        eprintln!(
-            "SKIPPED live_reppo_evaluation_settles_and_updates_a_profile: this would spend 100 \
-             non-renewable Reppo credits. Set REPPO_LIVE_OK=1 for this command to run it \
-             (owner approval required)."
-        );
-        return;
-    }
-    dotenvy::dotenv().ok();
-    // Built directly, not through `from_env`: REPPO_LIVE_OK is this test's
-    // explicit opt-in, so it must not also require SOLV_REPPO_ENABLED.
-    let api_key = std::env::var("REPPO_API_KEY").expect("REPPO_API_KEY must be set");
-    let reppo = ReppoHttpClient::new(api_key, solv::reppo::DEFAULT_TIMEOUT).unwrap();
-
-    // Budget exactly one evaluation, and let the worker give up well before
-    // this test does so a stuck evaluation reports its own `evalId`.
-    let config = BureauConfig {
-        starting_credits: CREDITS_PER_EVAL,
-        max_overdue: Duration::from_secs(50 * 60),
-        ..BureauConfig::default()
-    };
-    let window = Duration::from_secs(u64::from(config.settlement_minutes) * 60);
-    let deadline =
-        std::time::Instant::now() + window + config.max_overdue + Duration::from_secs(300);
-
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path().join("state.json")).unwrap();
-    let (bureau, _worker) = Bureau::spawn(
-        std::sync::Arc::new(reppo),
-        std::sync::Arc::clone(&store),
-        config,
-    );
-
-    let enqueued = bureau
-        .enqueue(AuditRequest {
-            counterparty_id: "Solv live test".to_string(),
-            counterparty_name: "Solv live test".to_string(),
-            target_url: "https://eval.reppo.xyz".to_string(),
-            claim: "Evaluation API for AI agent outputs, scored by staked evaluators.".to_string(),
-        })
-        .expect("enqueue");
-
-    let status = loop {
-        let status = bureau.job_status(&enqueued.job_id).expect("job known");
-        if status.is_terminal() {
-            break status;
+/// The body of the one live evaluation (2026-11-15, `taskType: claim`),
+/// trimmed to the fields Solv reads plus the ones it must ignore.
+fn live_low_confidence_body() -> Value {
+    json!({
+        "id": "cmwhxfvbg000708l8j4dsfw4c",
+        "taskType": "claim",
+        "status": "COMPLETED",
+        "score": 0,
+        "route": "review",
+        "creditsCharged": 440,
+        "completedAt": "2026-11-15T14:30:10.565Z",
+        "result": {
+            "score": 0,
+            "decision": "reject",
+            "confidence": "low",
+            "route": "review",
+            "reason": "score 0 < passAt 70 -> decision reject; score < rejectBelow 60, but confidence low < required medium -> review",
+            "rubric_scores": { "accuracy": 0, "evidence": 0, "precision": 0 },
+            "gates": [],
+            "consensus": {
+                "weighting": "economic (net veREPPO)",
+                "economic_score": 0,
+                "equal_weight_score": 33,
+                "score_spread": 23.6
+            }
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "worker did not reach a verdict in time; last status {status:?}"
-        );
-        tokio::time::sleep(Duration::from_secs(15)).await;
-    };
+    })
+}
 
-    assert!(
-        matches!(status, JobStatus::Settled { .. }),
-        "live evaluation did not settle: {status:?}"
+#[test]
+fn the_live_low_confidence_body_parses_and_keeps_its_confidence() {
+    let EvalStatus::Settled(eval) =
+        parse_status_response(&live_low_confidence_body()).expect("live body parses")
+    else {
+        panic!("a COMPLETED body must settle");
+    };
+    assert_eq!(eval.reppo_score, 0.0);
+    assert_eq!(eval.credits_charged, 440);
+    assert_eq!(eval.route.as_deref(), Some("review"));
+    assert_eq!(eval.confidence, Some(Confidence::Low));
+    // accuracy and evidence feed the track-record pillar; the three
+    // dimensions cover nothing else, so the rest sit at the neutral 5.
+    assert_eq!(
+        (
+            eval.pillars.reliability,
+            eval.pillars.track_record,
+            eval.pillars.safety,
+            eval.pillars.maturity
+        ),
+        (5, 0, 5, 5)
     );
-    let profile = store.profile("Solv live test").expect("profile written");
-    let score = profile.score.expect("profile carries a settled score");
-    assert!((0.0..=100.0).contains(&score.reppo_score));
-    assert!(!score.eval_id.is_empty());
+}
+
+#[test]
+fn a_missing_or_unknown_confidence_is_none_not_a_guess() {
+    for confidence in [None, Some("certain"), Some("")] {
+        let mut body = live_low_confidence_body();
+        match confidence {
+            Some(value) => body["result"]["confidence"] = json!(value),
+            None => {
+                body["result"].as_object_mut().unwrap().remove("confidence");
+            }
+        }
+        let EvalStatus::Settled(eval) = parse_status_response(&body).unwrap() else {
+            panic!("a COMPLETED body must settle");
+        };
+        assert_eq!(eval.confidence, None, "confidence {confidence:?}");
+    }
+    for (raw, expected) in [
+        ("LOW", Confidence::Low),
+        ("Medium", Confidence::Medium),
+        ("high", Confidence::High),
+    ] {
+        let mut body = live_low_confidence_body();
+        body["result"]["confidence"] = json!(raw);
+        let EvalStatus::Settled(eval) = parse_status_response(&body).unwrap() else {
+            panic!("a COMPLETED body must settle");
+        };
+        assert_eq!(eval.confidence, Some(expected));
+    }
 }
