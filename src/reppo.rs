@@ -269,11 +269,22 @@ impl ReppoClient for ReppoHttpClient {
         if !status.is_success() {
             return Err(status_error(status));
         }
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|error| ReppoError::Parse(error.to_string()))?;
-        parse_submit_response(&body)
+        // The evaluation exists by now. If its id cannot be read, the
+        // sanitised start of the body goes into the error so an operator
+        // can still find the id and recover the evaluation by hand.
+        let bytes = response.bytes().await?;
+        let with_snippet = |reason: String| {
+            ReppoError::Parse(format!(
+                "{reason}; body starts: {}",
+                sanitize_untrusted(&String::from_utf8_lossy(&bytes), BODY_SNIPPET_CHARS)
+            ))
+        };
+        let body: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| with_snippet(format!("submit response is not JSON ({error})")))?;
+        parse_submit_response(&body).map_err(|error| match error {
+            ReppoError::Parse(reason) => with_snippet(reason),
+            other => other,
+        })
     }
 
     async fn status(&self, eval_id: &str) -> Result<EvalStatus, ReppoError> {
@@ -297,6 +308,48 @@ impl ReppoClient for ReppoHttpClient {
             .map_err(|error| ReppoError::Parse(error.to_string()))?;
         parse_status_response(&body)
     }
+}
+
+/// Reppo's text is untrusted; this much of it is allowed into a log line
+/// or a job status.
+pub const MAX_UNTRUSTED_CHARS: usize = 200;
+/// How much of an unreadable submit response is kept for manual recovery.
+const BODY_SNIPPET_CHARS: usize = 150;
+/// Cap for an error description that carries a recovery snippet: the
+/// snippet plus the words around it.
+pub const MAX_ERROR_CHARS: usize = 320;
+
+/// Makes text from outside safe to print and to store in a status: control
+/// characters (newlines, escapes, NUL) and invisible direction/zero-width
+/// characters are dropped, so it cannot forge a log line or hide what it
+/// says, and the result is at most `max_chars` characters, cut on a
+/// character boundary and ending in `...` when something was removed from
+/// the end.
+pub fn sanitize_untrusted(text: &str, max_chars: usize) -> String {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !c.is_control() && !is_invisible_format_char(*c))
+        .collect();
+    if cleaned.chars().count() <= max_chars {
+        return cleaned;
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut cut: String = cleaned.chars().take(keep).collect();
+    cut.push_str("...");
+    cut.chars().take(max_chars).collect()
+}
+
+/// Zero-width and bidirectional-formatting characters: not `is_control`,
+/// but they let text say one thing and display another.
+fn is_invisible_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
 /// Percent-encodes everything outside the RFC 3986 unreserved set so an

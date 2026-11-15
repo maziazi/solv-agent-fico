@@ -16,7 +16,7 @@ use solv::bureau::{AuditRequest, Bureau, BureauConfig, JobStatus};
 use solv::reppo::{
     ALLOWED_SETTLEMENT_MINUTES, EvalStatus, EvalSubmission, MAX_PAYLOAD_BYTES, PILLAR_CRITERIA,
     ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
-    parse_status_response,
+    parse_status_response, sanitize_untrusted,
 };
 use solv::score::Pillars;
 use solv::state::Store;
@@ -390,6 +390,74 @@ fn rfc3339_rejects_malformed_shapes_instead_of_guessing() {
         parse_rfc3339_unix("2026-10-14T17:18:42.999Z"),
         parse_rfc3339_unix("2026-10-14T17:18:42Z")
     );
+}
+
+#[test]
+fn untrusted_text_loses_control_characters_and_is_bounded() {
+    assert_eq!(
+        sanitize_untrusted("line one\nline\ttwo\r\u{1b}[31mred\u{7}", 200),
+        "line onelinetwo[31mred"
+    );
+    // Bidi overrides and zero-width characters are invisible tricks.
+    assert_eq!(
+        sanitize_untrusted("a\u{202e}b\u{200b}c\u{2066}d", 200),
+        "abcd"
+    );
+    // Exactly at the limit is untouched; one over is cut and marked.
+    let at_limit = "x".repeat(200);
+    assert_eq!(sanitize_untrusted(&at_limit, 200), at_limit);
+    let over = sanitize_untrusted(&"y".repeat(5_000), 200);
+    assert_eq!(over.chars().count(), 200);
+    assert!(over.ends_with("..."));
+    // Multi-byte text is cut on a character boundary, never mid-byte.
+    let cut = sanitize_untrusted(&"é".repeat(1_000), 50);
+    assert_eq!(cut.chars().count(), 50);
+    assert_eq!(sanitize_untrusted("", 200), "");
+}
+
+#[tokio::test]
+async fn an_unreadable_submit_body_is_logged_sanitized_so_the_eval_id_can_be_recovered() {
+    // Control characters first, then a recoverable id buried in a body that
+    // is not the documented shape, then a long tail.
+    let noisy = format!(
+        "\u{7}\u{1b}[2J{{\"data\": {{\"evalIdTypo\": \"ev_recover_me\"}}}}{}",
+        "z".repeat(5_000)
+    );
+    let app = axum::Router::new().route(
+        "/agents/eval-requests/submit",
+        post(move || {
+            let body = noisy.clone();
+            async move { (StatusCode::CREATED, body) }
+        }),
+    );
+    let (base, _server) = reppo_server(app).await;
+    let error = client(base).submit(&submission()).await.unwrap_err();
+    let ReppoError::Parse(message) = error else {
+        panic!("expected Parse, got {error:?}");
+    };
+    assert!(message.contains("ev_recover_me"), "{message}");
+    assert!(
+        !message.chars().any(char::is_control),
+        "no control characters survive: {message:?}"
+    );
+    assert!(message.chars().count() < 400, "bounded: {}", message.len());
+
+    // Valid JSON that lacks `evalId` gets the same treatment.
+    let app = axum::Router::new().route(
+        "/agents/eval-requests/submit",
+        post(|| async {
+            (
+                StatusCode::CREATED,
+                Json(json!({ "id": "internal-only", "note": "ev_in_other_field" })),
+            )
+        }),
+    );
+    let (base, _server) = reppo_server(app).await;
+    let ReppoError::Parse(message) = client(base).submit(&submission()).await.unwrap_err() else {
+        panic!("expected Parse");
+    };
+    assert!(message.contains("evalId missing"), "{message}");
+    assert!(message.contains("ev_in_other_field"), "{message}");
 }
 
 /// Hits the real Reppo Evaluation API through the whole worker path:

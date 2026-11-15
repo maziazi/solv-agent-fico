@@ -7,13 +7,14 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use solv::bureau::{AuditRequest, Bureau, BureauConfig, EnqueueError, JobStatus, clamp_settled_at};
 use solv::reppo::{
     EvalStatus, EvalSubmission, MockOutcome, MockReppoClient, ReppoClient, ReppoError,
-    SubmissionError, UnconfiguredReppoClient,
+    ReppoHttpClient, SubmissionError, UnconfiguredReppoClient,
 };
 use solv::score::{Pillars, Tier, effective_score, tier_for};
 use solv::state::{Profile, Store};
@@ -683,4 +684,201 @@ async fn a_job_that_panics_fails_alone_and_the_queue_keeps_moving() {
     assert_eq!(bureau.queued_len(), 0);
     assert!(store.profile("bad").is_none());
     assert!(store.profile("good").is_some());
+}
+
+/// Waits on the real clock (these tests drive a real socket, so the paused
+/// clock cannot be used) until `job_id` is terminal.
+async fn wait_terminal_real_time(bureau: &Bureau, job_id: &str) -> JobStatus {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = bureau.job_status(job_id) {
+            if status.is_terminal() {
+                return status;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "job {job_id} never became terminal"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn fast_retry_config() -> BureauConfig {
+    BureauConfig {
+        submit_retry_backoff: Duration::from_millis(10),
+        ..BureauConfig::default()
+    }
+}
+
+/// Accepts the submit request, counts it, and never answers in time.
+async fn silent_submit_server(hits: Arc<AtomicU32>) -> (String, tokio::task::JoinHandle<()>) {
+    let app = axum::Router::new().route(
+        "/agents/eval-requests/submit",
+        axum::routing::post(move || {
+            let hits = Arc::clone(&hits);
+            async move {
+                hits.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                axum::http::StatusCode::CREATED
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{addr}"), task)
+}
+
+#[tokio::test]
+async fn a_submit_whose_response_is_lost_is_never_resent() {
+    // The request reached Reppo but the answer never came back: an
+    // evaluation may exist and the slot may be held. Sending again could
+    // double-spend, so the job fails and the credit is counted as spent.
+    let hits = Arc::new(AtomicU32::new(0));
+    let (base, _server) = silent_submit_server(Arc::clone(&hits)).await;
+    let client =
+        ReppoHttpClient::with_base_url("test-key".to_string(), Duration::from_millis(100), base)
+            .unwrap();
+    let (_dir, store) = store();
+    let (bureau, _worker) = spawn(Arc::new(client), &store, fast_retry_config());
+    let enqueued = bureau.enqueue(request("lost")).unwrap();
+
+    let status = wait_terminal_real_time(&bureau, &enqueued.job_id).await;
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(
+        reason.contains("submit outcome unknown; slot may be held"),
+        "{reason}"
+    );
+
+    // Long enough for a resend (10 ms backoff + 100 ms timeout) to show up.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "never resubmitted");
+    assert_eq!(
+        bureau.credits_remaining(),
+        900,
+        "pessimistic: the evaluation may have been charged"
+    );
+    assert!(store.profile("lost").is_none());
+}
+
+#[tokio::test]
+async fn a_connection_refused_submit_was_never_sent_so_it_is_retried_and_free() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener); // nothing listens here any more: connection refused
+    let client = ReppoHttpClient::with_base_url(
+        "test-key".to_string(),
+        Duration::from_secs(2),
+        format!("http://{addr}"),
+    )
+    .unwrap();
+    let (_dir, store) = store();
+    let (bureau, _worker) = spawn(Arc::new(client), &store, fast_retry_config());
+    let enqueued = bureau.enqueue(request("offline")).unwrap();
+
+    let status = wait_terminal_real_time(&bureau, &enqueued.job_id).await;
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(reason.contains("submit failed"), "{reason}");
+    assert!(
+        !reason.contains("outcome unknown"),
+        "a refused connection is certain, not ambiguous: {reason}"
+    );
+    assert_eq!(bureau.credits_remaining(), 1_000, "nothing was sent");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_submit_response_is_not_resent_and_counts_as_spent() {
+    // A 201 whose body has no usable evalId: the evaluation exists but we
+    // cannot name it. Retrying would open a second one.
+    let (_dir, store) = store();
+    let client = Arc::new(FlakySubmit {
+        inner: MockReppoClient::new(vec![], 0),
+        failures_left: Mutex::new(1),
+        error: || ReppoError::Parse("evalId missing".to_string()),
+    });
+    let (bureau, _worker) = spawn(client.clone(), &store, BureauConfig::default());
+    let enqueued = bureau.enqueue(request("garbled")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(
+        reason.contains("submit outcome unknown; slot may be held"),
+        "{reason}"
+    );
+    assert_eq!(client.inner.submit_calls(), 0, "the retry never happened");
+    assert_eq!(bureau.credits_remaining(), 900);
+}
+
+/// A client whose `status` fails a scripted number of times before
+/// delegating to a mock.
+struct FlakyPoll {
+    inner: MockReppoClient,
+    failures_left: Mutex<u32>,
+    error: fn() -> ReppoError,
+}
+
+#[async_trait]
+impl ReppoClient for FlakyPoll {
+    async fn submit(&self, submission: &EvalSubmission) -> Result<String, ReppoError> {
+        self.inner.submit(submission).await
+    }
+
+    async fn status(&self, eval_id: &str) -> Result<EvalStatus, ReppoError> {
+        {
+            let mut failures_left = self.failures_left.lock().unwrap();
+            if *failures_left > 0 {
+                *failures_left -= 1;
+                return Err((self.error)());
+            }
+        }
+        self.inner.status(eval_id).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_poll_with_a_bad_body_is_retried_twice_before_it_is_fatal() {
+    let parse = || ReppoError::Parse("bad body".to_string());
+
+    // Two bad bodies in a row, then a good one: settles.
+    let (_dir, store) = store();
+    let two = Arc::new(FlakyPoll {
+        inner: MockReppoClient::new(vec![], 0),
+        failures_left: Mutex::new(2),
+        error: parse,
+    });
+    let (bureau, _worker) = spawn(two, &store, BureauConfig::default());
+    let enqueued = bureau.enqueue(request("twice")).unwrap();
+    assert!(matches!(
+        wait_terminal(&bureau, &enqueued.job_id).await,
+        JobStatus::Settled { .. }
+    ));
+
+    // Three in a row: fatal, and the possibly-charged evaluation is
+    // counted as spent.
+    let (_dir2, store2) = self::store();
+    let three = Arc::new(FlakyPoll {
+        inner: MockReppoClient::new(vec![], 0),
+        failures_left: Mutex::new(3),
+        error: parse,
+    });
+    let (bureau2, _worker2) = spawn(three, &store2, BureauConfig::default());
+    let enqueued2 = bureau2.enqueue(request("thrice")).unwrap();
+    let status = wait_terminal(&bureau2, &enqueued2.job_id).await;
+    let JobStatus::Failed { reason } = status else {
+        panic!("expected Failed, got {status:?}");
+    };
+    assert!(
+        reason.contains("ev_mock_1"),
+        "recoverable by hand: {reason}"
+    );
+    assert!(store2.profile("thrice").is_none());
 }

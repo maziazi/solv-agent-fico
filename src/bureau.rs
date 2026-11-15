@@ -40,8 +40,8 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::reppo::{
-    CREDITS_PER_EVAL, EvalStatus, EvalSubmission, FREE_TIER_CREDITS, ReppoClient, ReppoError,
-    SettledEval, SubmissionError,
+    CREDITS_PER_EVAL, EvalStatus, EvalSubmission, FREE_TIER_CREDITS, MAX_ERROR_CHARS, ReppoClient,
+    ReppoError, SettledEval, SubmissionError, sanitize_untrusted,
 };
 use crate::score::SettledScore;
 use crate::state::{CounterpartyId, Profile, Store};
@@ -467,25 +467,77 @@ async fn process_job(
                 shared.credits.store(0, Ordering::Release);
                 return Err("reppo reports insufficient credits".to_string());
             }
-            Err(error) if is_transient(&error) && attempt <= config.max_reschedules => {
-                eprintln!("solv: reppo submit failed transiently ({error}); retrying");
-                tokio::time::sleep(config.submit_retry_backoff).await;
-            }
-            Err(error) => return Err(format!("submit failed: {error}")),
+            Err(error) => match classify_submit_error(&error) {
+                SubmitFailure::Retry if attempt <= config.max_reschedules => {
+                    eprintln!(
+                        "solv: reppo submit failed before it was sent ({}); retrying",
+                        describe(&error)
+                    );
+                    tokio::time::sleep(config.submit_retry_backoff).await;
+                }
+                SubmitFailure::Unknown => {
+                    // The request may have reached Reppo: an evaluation may
+                    // exist, be charged, and hold the slot. Sending again
+                    // could double-spend, so fail the job and count the
+                    // credit as spent.
+                    shared.spend(CREDITS_PER_EVAL);
+                    return Err(format!(
+                        "submit outcome unknown; slot may be held ({})",
+                        describe(&error)
+                    ));
+                }
+                SubmitFailure::Retry | SubmitFailure::Fatal => {
+                    return Err(format!("submit failed: {}", describe(&error)));
+                }
+            },
         }
     }
 }
 
-/// Transport failures, 5xx and 429 may clear on their own. Everything else
-/// (bad key, bad request, unparsable body) will not, and retrying it only
-/// delays the honest failure.
-fn is_transient(error: &ReppoError) -> bool {
+/// How the worker treats a failed `submit`.
+enum SubmitFailure {
+    /// Certainly not processed by Reppo; safe to send again.
+    Retry,
+    /// May have been processed: never send again.
+    Unknown,
+    /// Will not improve by retrying (bad key, bad request).
+    Fatal,
+}
+
+/// A submit is only safe to repeat when Reppo cannot have seen it: the TCP
+/// connection never opened, or the server answered 5xx/429 (an explicit
+/// refusal to process). A timeout, a dropped connection, or a response we
+/// cannot read all happen *after* the request was sent, so the outcome is
+/// unknown — and an unreadable 2xx means the evaluation exists but we
+/// cannot name it.
+fn classify_submit_error(error: &ReppoError) -> SubmitFailure {
+    match error {
+        ReppoError::Http(source) if source.is_connect() => SubmitFailure::Retry,
+        ReppoError::Http(_) | ReppoError::Parse(_) => SubmitFailure::Unknown,
+        ReppoError::Status(code) if *code >= 500 || *code == 429 => SubmitFailure::Retry,
+        _ => SubmitFailure::Fatal,
+    }
+}
+
+/// A status read is an idempotent GET, so any transport failure, 5xx, or
+/// 429 is worth trying again.
+fn is_transient_poll(error: &ReppoError) -> bool {
     match error {
         ReppoError::Http(_) => true,
         ReppoError::Status(code) => *code >= 500 || *code == 429,
         _ => false,
     }
 }
+
+/// An error rendered for a log line or a status: Reppo-controlled text
+/// (the body snippet, an unknown status word) is sanitised and bounded.
+fn describe(error: &ReppoError) -> String {
+    sanitize_untrusted(&error.to_string(), MAX_ERROR_CHARS)
+}
+
+/// Consecutive unreadable poll responses tolerated before the evaluation is
+/// given up on. A 200 with a bad body is usually a one-off.
+const MAX_POLL_PARSE_RETRIES: u32 = 2;
 
 /// Waits out the settlement window, then polls with doubling backoff until
 /// the evaluation leaves `PENDING` or the overdue allowance runs out.
@@ -502,18 +554,34 @@ async fn poll_until_resolved(
     tokio::time::sleep(window).await;
     let deadline = Instant::now() + config.max_overdue;
     let mut delay = config.poll_initial;
+    let mut parse_failures = 0u32;
     loop {
         match client.status(eval_id).await {
-            Ok(EvalStatus::Pending) => {}
+            Ok(EvalStatus::Pending) => parse_failures = 0,
             Ok(EvalStatus::Settled(eval)) => return Polled::Settled(eval),
             Ok(EvalStatus::Failed(reason)) => {
                 return Polled::Failed(reason.unwrap_or_else(|| "no reason given".to_string()));
             }
             Ok(EvalStatus::Denied) => return Polled::Fatal("denied by reppo".to_string()),
-            Err(error) if is_transient(&error) => {
-                eprintln!("solv: reppo poll for {eval_id} failed transiently ({error})");
+            Err(ReppoError::Parse(reason)) => {
+                parse_failures += 1;
+                if parse_failures > MAX_POLL_PARSE_RETRIES {
+                    return Polled::Fatal(format!(
+                        "poll failed: {} unreadable responses in a row ({})",
+                        parse_failures,
+                        sanitize_untrusted(&reason, MAX_ERROR_CHARS)
+                    ));
+                }
+                eprintln!("solv: reppo poll for {eval_id} returned an unreadable body; retrying");
             }
-            Err(error) => return Polled::Fatal(format!("poll failed: {error}")),
+            Err(error) if is_transient_poll(&error) => {
+                parse_failures = 0;
+                eprintln!(
+                    "solv: reppo poll for {eval_id} failed transiently ({})",
+                    describe(&error)
+                );
+            }
+            Err(error) => return Polled::Fatal(format!("poll failed: {}", describe(&error))),
         }
         if Instant::now() >= deadline {
             return Polled::Fatal(format!(
