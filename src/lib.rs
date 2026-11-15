@@ -13,6 +13,7 @@ pub mod receipt;
 pub mod reppo;
 pub mod rules;
 pub mod score;
+pub mod spans;
 pub mod state;
 pub mod tier1;
 pub mod tier2;
