@@ -24,7 +24,7 @@ function matches(entry: CounterpartyEntry, query: string): boolean {
 
 function Unrated({ what }: { what: string }): JSX.Element {
   return (
-    <div className="border border-dashed border-border bg-bg p-4 text-sm">
+    <div className="bg-bg p-4 text-sm">
       <p className="font-medium">
         <span className="font-mono">UNRATED</span>: no evidence on file for “{what}”.
       </p>
@@ -60,7 +60,7 @@ export function CounterpartySearch({
   );
 
   return (
-    <section aria-labelledby="check-title" className="border border-border bg-surface p-5">
+    <section aria-labelledby="check-title" className="bg-surface p-5">
       <h2 id="check-title" className="font-head text-xl font-bold">
         Check a counterparty
       </h2>
@@ -78,12 +78,12 @@ export function CounterpartySearch({
         onChange={(event) => setQuery(event.target.value)}
         placeholder="e.g. github-rest-api or https://api.github.com"
         autoComplete="off"
-        className="mt-1 w-full border border-border bg-bg px-3 py-2 font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="mt-1 w-full bg-bg px-3 py-2 font-mono text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       />
       <div className="mt-4" aria-live="polite">
         {needle !== "" && found.length === 0 && <Unrated what={query.trim()} />}
         {found.length > 0 && (
-          <ul className="divide-y divide-border border border-border">
+          <ul className="">
             {found.map((entry) => (
               <li key={entry.counterparty_id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
                 <Link
@@ -138,7 +138,7 @@ export function CounterpartyDetail({
   }, [lastReceiptId]);
 
   return (
-    <section aria-labelledby="detail-title" className="border border-border bg-surface p-5">
+    <section aria-labelledby="detail-title" className="bg-surface p-5">
       <p className="text-sm">
         <Link to="/explorer" className="underline decoration-1 underline-offset-2">
           ← back to the registry

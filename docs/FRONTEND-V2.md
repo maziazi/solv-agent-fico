@@ -47,16 +47,16 @@ most of the product.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ ■ Solv   Product   How it works   Explorer   Docs   Pricing   [Try the │
-│          ▾                                                      desk]  │
+│ ■ Solv   How it works   See it work   Explorer   Docs   Pricing   [Try │
+│                                                                the desk] │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 | Item | Route | Contents |
 | --- | --- | --- |
 | **Solv** (wordmark) | `/` | Landing page |
-| **Product** ▾ | — | Dropdown: Pre-spend gate · Credit bureau · Learned guardrails · Attack Lab |
-| **How it works** | `/how-it-works` | The three tiers, the decision table, the score pipeline |
+| **How it works** | `/how-it-works` | The three tiers, the decision table, the score pipeline; links to the Attack Lab |
+| **See it work** | `/proof` | One live example per audience |
 | **Explorer** | `/explorer` | Public search over counterparties and receipts |
 | **Docs** | `/docs` | API reference, integration snippets, reason-code taxonomy |
 | **Pricing** | `/pricing` | Cost model, labelled per claim |
@@ -249,8 +249,8 @@ Constraints that must hold:
 
 Beyond what `docs/DESIGN.md` §5 already defines:
 
-- **Navbar** with dropdown, mobile drawer, and an explorer-mode variant carrying
-  the search field.
+- **Navbar** with a mobile drawer (no dropdown), and an explorer-mode variant
+  carrying the search field.
 - **Search field** with id-type detection (`slv_…` → receipt, otherwise counterparty).
 - **Band chip** — five-step ramp, always accompanied by the numeric score; a chip
   alone is never sufficient.
@@ -272,7 +272,7 @@ never be the only channel carrying the band — the numeric score is always show
 ## 7. TODO
 
 - [ ] PR-F1 `feat(web): navbar and route shell`
-  - [ ] Navbar, dropdown, mobile drawer, footer expansion
+  - [ ] Navbar, mobile drawer, footer expansion
   - [ ] Move the desk from `/` to `/desk`; redirect `/` to the landing page
   - [ ] Route skeletons for every navbar destination so no link is dead
 - [ ] PR-F2 `feat(web): landing page`
