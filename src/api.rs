@@ -67,7 +67,31 @@ pub struct PreSpendCheckRequest {
 struct ScoreSource {
     provider: &'static str,
     eval_id: String,
-    settled_at_unix: u64,
+    /// ISO-8601 UTC, the shape SPEC §7.1 pins on receipts.
+    settled_at: String,
+}
+
+/// Formats a unix timestamp as ISO-8601 UTC without pulling a date
+/// dependency: civil-from-days (Howard Hinnant's algorithm).
+pub fn iso8601_utc(unix_seconds: u64) -> String {
+    let days = (unix_seconds / 86_400) as i64;
+    let secs_of_day = unix_seconds % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +137,13 @@ pub async fn pre_spend_check(
             .into_response();
     }
 
+    let gate_request = PreSpendRequest {
+        counterparty_name: request.counterparty_name.clone(),
+        target_url: request.target_url.clone(),
+        amount_usd: request.amount_usd,
+        service_description: request.service_description.clone(),
+    };
+
     // State read: in-process, budgeted at ≤ 1 ms p95 (SPEC §2.1).
     let state_started = std::time::Instant::now();
     let profile: Option<Profile> = state.store().profile(&request.counterparty_name);
@@ -143,21 +174,14 @@ pub async fn pre_spend_check(
         Err(_) => crate::policy::Tier1Signals::unavailable(),
     };
     let tier1_latency = tier1_started.elapsed().as_millis() as u64;
+    // The request struct is consumed by the gate; everything before this
+    // point worked from clones of the same fields.
+    drop(request);
 
     // Escalation is deterministic (SPEC §5.1). Tier 2 itself arrives with
     // PR-07; until then an escalated request records Tier 2 as unavailable
     // and the gate fails closed where the verdict requires it.
-    let escalated = needs_escalation(
-        &PreSpendRequest {
-            counterparty_name: request.counterparty_name.clone(),
-            target_url: request.target_url.clone(),
-            amount_usd: request.amount_usd,
-            service_description: request.service_description.clone(),
-        },
-        &tier1_signals,
-        tier,
-        &config,
-    );
+    let escalated = needs_escalation(&gate_request, &tier1_signals, tier, &config);
     let tier2_signals = if escalated {
         Some(Tier2Signals {
             outcome: Tier2Outcome::Unavailable,
@@ -166,28 +190,23 @@ pub async fn pre_spend_check(
         None
     };
 
-    let total_ms = started.elapsed().as_millis() as u64;
     let decision = decide(
-        &PreSpendRequest {
-            counterparty_name: request.counterparty_name,
-            target_url: request.target_url,
-            amount_usd: request.amount_usd,
-            service_description: request.service_description,
-        },
+        &gate_request,
         profile.as_ref(),
         now,
-        total_ms,
+        started.elapsed().as_millis() as u64,
         &tier1_signals,
         tier2_signals.as_ref(),
         &[],
         &config,
     );
+    let total_ms = started.elapsed().as_millis() as u64;
 
     let receipt_id = new_receipt_id();
-    let mut tier_used = vec!["clef-flash"];
-    if escalated {
-        tier_used.push("serv-reasoning");
-    }
+    // `tier_used` names the tiers that actually ran. Until PR-07 wires the
+    // real Tier 2 client, only Tier 1 ever runs — an escalated request is
+    // held by the gate (SOLV-SYSTEM-003), never silently approved.
+    let tier_used = vec!["clef-flash"];
 
     let body = PreSpendCheckResponse {
         receipt_url: format!("/receipt/{receipt_id}"),
@@ -203,7 +222,7 @@ pub async fn pre_spend_check(
         score_source: settled.map(|s| ScoreSource {
             provider: "reppo",
             eval_id: s.eval_id.clone(),
-            settled_at_unix: s.settled_at_unix,
+            settled_at: iso8601_utc(s.settled_at_unix),
         }),
         tier_used,
         latency_ms: LatencyMs {

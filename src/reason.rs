@@ -104,6 +104,9 @@ impl ReasonCode {
     /// rejected because the taxonomy is closed.
     pub fn parse(code: &str) -> Option<Self> {
         if let Some(id) = code.strip_prefix("SOLV-RULE-") {
+            if id.is_empty() {
+                return None;
+            }
             return Some(ReasonCode::Rule(id.to_string()));
         }
         match code {

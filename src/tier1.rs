@@ -286,6 +286,8 @@ pub enum ClefError {
     Status(u16),
     #[error("clef-flash response was not the documented shape: {0}")]
     Parse(String),
+    #[error("tier 1 client is not configured")]
+    Unconfigured,
 }
 
 /// The Tier 1 boundary. Mocked in every offline test; implemented once by
@@ -443,8 +445,6 @@ pub struct UnconfiguredClefClient;
 #[async_trait]
 impl ClefClient for UnconfiguredClefClient {
     async fn ask(&self, _request: &ClefRequest) -> Result<ClefResponse, ClefError> {
-        Err(ClefError::Parse(
-            "tier 1 client is not configured (missing CLOUDFLARE_* credentials)".to_string(),
-        ))
+        Err(ClefError::Unconfigured)
     }
 }
