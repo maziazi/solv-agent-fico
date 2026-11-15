@@ -213,6 +213,26 @@ fn row7_all_tiers_down_fails_closed_to_hold() {
 }
 
 #[test]
+fn row7_failed_escalation_holds_even_with_a_tier1_verdict() {
+    // The orchestrator escalated and Tier 2 failed: the escalation's
+    // verdict is missing, so the request cannot be approved (G1).
+    let profile = prime_profile();
+    let tier2 = Tier2Signals {
+        outcome: Tier2Outcome::Unavailable,
+    };
+    let decision = run(
+        &request(50.0),
+        Some(&profile),
+        &tier1_clean(),
+        Some(&tier2),
+        &[],
+        10,
+    );
+    assert_eq!(decision.kind, DecisionKind::Hold);
+    assert_eq!(decision.reasons[0].code, ReasonCode::System003);
+}
+
+#[test]
 fn row7_tier2_verdict_covers_a_tier1_outage() {
     let profile = prime_profile();
     let tier2 = Tier2Signals {

@@ -286,6 +286,8 @@ pub enum ClefError {
     Status(u16),
     #[error("clef-flash response was not the documented shape: {0}")]
     Parse(String),
+    #[error("tier 1 client is not configured")]
+    Unconfigured,
 }
 
 /// The Tier 1 boundary. Mocked in every offline test; implemented once by
@@ -432,5 +434,17 @@ impl ClefClient for MockClefClient {
         Ok(ClefResponse {
             answers: self.answers.clone(),
         })
+    }
+}
+
+/// A Tier 1 client used when credentials are absent: every call fails,
+/// which the endpoint maps to fail-closed HOLD through the policy gate.
+/// The service still boots (CI probes /healthz with no .env at all).
+pub struct UnconfiguredClefClient;
+
+#[async_trait]
+impl ClefClient for UnconfiguredClefClient {
+    async fn ask(&self, _request: &ClefRequest) -> Result<ClefResponse, ClefError> {
+        Err(ClefError::Unconfigured)
     }
 }

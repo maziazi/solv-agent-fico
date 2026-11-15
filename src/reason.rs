@@ -58,7 +58,11 @@ pub struct Evidence {
 
 /// The closed reason-code taxonomy (SPEC §6.2). `Rule` carries the
 /// registered `SOLV-RULE-` prefix with a per-rule id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Serialises as the taxonomy string (`"SOLV-SCORE-010"`, `"SOLV-RULE-014"`),
+/// which is what receipts carry and auditors grep for — not the Rust
+/// variant name.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReasonCode {
     Injection001,
     Injection002,
@@ -80,7 +84,53 @@ pub enum ReasonCode {
     Rule(String),
 }
 
+impl Serialize for ReasonCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ReasonCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let code = String::deserialize(deserializer)?;
+        ReasonCode::parse(&code).ok_or_else(|| {
+            serde::de::Error::unknown_variant(&code, &["a registered SOLV-* taxonomy code"])
+        })
+    }
+}
+
 impl ReasonCode {
+    /// Parses a taxonomy string back into a code; unknown codes are
+    /// rejected because the taxonomy is closed.
+    pub fn parse(code: &str) -> Option<Self> {
+        if let Some(id) = code.strip_prefix("SOLV-RULE-") {
+            if id.is_empty() {
+                return None;
+            }
+            return Some(ReasonCode::Rule(id.to_string()));
+        }
+        match code {
+            "SOLV-INJECTION-001" => Some(ReasonCode::Injection001),
+            "SOLV-INJECTION-002" => Some(ReasonCode::Injection002),
+            "SOLV-INJECTION-003" => Some(ReasonCode::Injection003),
+            "SOLV-SCORE-001" => Some(ReasonCode::Score001),
+            "SOLV-SCORE-002" => Some(ReasonCode::Score002),
+            "SOLV-SCORE-003" => Some(ReasonCode::Score003),
+            "SOLV-SCORE-010" => Some(ReasonCode::Score010),
+            "SOLV-COLDSTART-001" => Some(ReasonCode::Coldstart001),
+            "SOLV-COLDSTART-002" => Some(ReasonCode::Coldstart002),
+            "SOLV-LIMIT-001" => Some(ReasonCode::Limit001),
+            "SOLV-LIMIT-002" => Some(ReasonCode::Limit002),
+            "SOLV-LIVENESS-001" => Some(ReasonCode::Liveness001),
+            "SOLV-REASON-001" => Some(ReasonCode::Reason001),
+            "SOLV-REASON-002" => Some(ReasonCode::Reason002),
+            "SOLV-SYSTEM-001" => Some(ReasonCode::System001),
+            "SOLV-SYSTEM-002" => Some(ReasonCode::System002),
+            "SOLV-SYSTEM-003" => Some(ReasonCode::System003),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> String {
         match self {
             ReasonCode::Injection001 => "SOLV-INJECTION-001".to_string(),

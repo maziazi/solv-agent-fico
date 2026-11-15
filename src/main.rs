@@ -1,4 +1,5 @@
 use solv::state::Store;
+use solv::tier1::{ClefClient, CloudflareClefClient, UnconfiguredClefClient};
 use solv::{AppState, resolve_port, resolve_state_file, run_server};
 
 /// Resolves on Ctrl-C (any platform) or SIGTERM (Unix), whichever first.
@@ -44,7 +45,18 @@ async fn main() {
         std::process::exit(1);
     });
     store.spawn_snapshot_worker().await;
-    let state = AppState::new(store);
+
+    let tier1: std::sync::Arc<dyn ClefClient> = match CloudflareClefClient::from_env() {
+        Some(client) => std::sync::Arc::new(client),
+        None => {
+            eprintln!(
+                "solv: CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN not set; \
+                 pre-spend-check will fail closed until credentials exist"
+            );
+            std::sync::Arc::new(UnconfiguredClefClient)
+        }
+    };
+    let state = AppState::new(store, tier1);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await

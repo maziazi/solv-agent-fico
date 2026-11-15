@@ -339,7 +339,10 @@ pub fn decide(
     }
 
     // Row 7 — no tier produced a verdict (both down, or Tier 1 answered
-    // nothing it could parse): fail closed.
+    // nothing it could parse): fail closed. A Tier 2 entry present as
+    // Unavailable means the orchestrator escalated and the call failed —
+    // the escalation's verdict is missing, so the request holds too
+    // (G1: system failure never becomes permission to pay).
     let tier2_covering = tier2.is_some_and(|t2| {
         matches!(
             t2.outcome,
@@ -448,6 +451,27 @@ pub fn decide(
                 Tier2Verdict::Approve => {}
             }
         }
+    }
+
+    // A required escalation that failed can never approve: a Tier 2 entry
+    // present as Unavailable means the orchestrator escalated and the call
+    // failed (G1 — system failure never becomes permission to pay). It is
+    // evaluated after every SPEC row so a more specific hold (cold start,
+    // cap, revision) still names itself on the receipt.
+    if matches!(
+        tier2,
+        Some(Tier2Signals {
+            outcome: Tier2Outcome::Unavailable
+        })
+    ) {
+        return hold(
+            ReasonCode::System003,
+            evidence(
+                Source::PolicyGate,
+                "tier_availability",
+                serde_json::json!({ "escalation_failed": true }),
+            ),
+        );
     }
 
     // A learned rule fired with a forcing-hold effect and nothing harder
