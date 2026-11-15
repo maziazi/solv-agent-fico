@@ -663,7 +663,21 @@ verbatim text still lives, bounded, in `reasons[].evidence.quote` under the
 rules in §6.1.
 
 `canonical_json` means sorted keys and no superfluous whitespace, so a third
-party can recompute the hash.
+party can recompute the hash. Precisely: object keys sorted by their UTF-8
+bytes; no whitespace; strings escaped per RFC 8259 with only the mandatory
+escapes (non-ASCII stays raw, control characters become `\u00xx`); numbers in
+shortest round-trip form, integral floats keeping their `.0` (as Python's
+`json.dumps` prints them). The hash is the lowercase hex SHA-256 of that text,
+and `GET /receipt/:id` returns the evidence document so the check needs nothing
+else. Notes on the shape:
+
+- `counterparty_id` is the key the profile was looked up by (today the
+  counterparty name).
+- `profile_snapshot` is `null` for an UNRATED counterparty, and `tier2` is
+  `null` when Tier 2 did not run — an empty object would pass for an audit.
+- `tier1.answers` and `tier1.confidences` are `null` when the Tier 1 call
+  failed.
+- `ruleset_version` is `1` until learned rules (PR-10) make it dynamic.
 
 ---
 

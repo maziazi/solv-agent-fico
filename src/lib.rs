@@ -6,6 +6,7 @@
 pub mod api;
 pub mod policy;
 pub mod reason;
+pub mod receipt;
 pub mod score;
 pub mod state;
 pub mod tier1;
@@ -56,6 +57,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
+        .route("/api/v1/receipt/{id}", get(receipt::get_receipt))
+        .route("/receipt/{id}", get(receipt::get_receipt))
         .with_state(state)
 }
 

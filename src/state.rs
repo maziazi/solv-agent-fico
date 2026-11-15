@@ -7,12 +7,13 @@
 //! file behind. The snapshot is triggered asynchronously after the response
 //! ships, with a 2-second debounce, and never touches the hot path.
 //!
-//! Accepted limit (deliberate, revisit with PR-08): the three collections
-//! are serialised without a cross-collection transaction, so a snapshot can
-//! pair a fresh receipt with a not-yet-updated profile if a decision lands
-//! mid-serialisation. It self-heals on the next mutation's snapshot. Once
-//! PR-08 introduces multi-collection decision writes, they and the snapshot
-//! will share a transaction boundary.
+//! Accepted limit (deliberate): the three collections are serialised without
+//! a cross-collection transaction, so a snapshot can pair a fresh receipt
+//! with a not-yet-updated profile if both change mid-serialisation. It
+//! self-heals on the next mutation's snapshot. A decision writes only its
+//! receipt (a receipt embeds the profile data it was made from), so the
+//! pre-spend path never needs the transaction; the Reppo worker (PR-09),
+//! which updates profiles, is where to revisit it.
 //!
 //! The snapshot file contains untrusted counterparty text and is never
 //! committed (AGENTS.md hard prohibitions).
@@ -52,15 +53,23 @@ pub struct Profile {
     pub score: Option<crate::score::SettledScore>,
 }
 
-/// A decision receipt.
+/// A decision receipt (SPEC §3.3 G4, §6.3, §7.3): the decision summary, the
+/// evidence document with its SHA-256, and the response as it was returned.
+/// Never altered after creation — `insert_receipt` refuses to overwrite.
 ///
-/// Minimal for now: the full receipt schema of SPEC §7.1 lands with the
-/// receipt store.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `evidence` and `response` default to `null` so a snapshot from before
+/// the receipt store still parses; the service never wrote receipts then.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Receipt {
     pub decision: String,
     pub amount_usd: f64,
     pub created_at_unix: u64,
+    #[serde(default)]
+    pub evidence_sha256: String,
+    #[serde(default)]
+    pub evidence: serde_json::Value,
+    #[serde(default)]
+    pub response: serde_json::Value,
 }
 
 /// A learned guardrail rule (SPEC §5.5). Full shape lands with rule
