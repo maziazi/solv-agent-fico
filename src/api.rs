@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -442,6 +442,62 @@ pub struct AuditCounterpartyRequest {
     pub counterparty_id: String,
     pub target_url: String,
     pub claim: String,
+}
+
+/// `GET /api/v1/agent/{id}` (SPEC §7.5): what Solv already knows about one
+/// counterparty, read from the in-memory profile only. No Clef, no SERV, no
+/// Reppo, so it answers in microseconds. It is not a payment decision:
+/// `max_safe_spend` is the band cap, and `pre-spend-check` still applies the
+/// remaining gate rows (injection, amount, learned rules) to a real request.
+#[derive(Debug, Serialize)]
+pub struct AgentLookup {
+    id: String,
+    rated: bool,
+    tier: String,
+    fico_score: Option<u16>,
+    score_age_days: Option<u32>,
+    pillars: Option<Pillars>,
+    score_source: Option<ScoreSource>,
+    max_safe_spend: f64,
+    target_url: Option<String>,
+}
+
+pub async fn agent_lookup(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<AgentLookup>, (StatusCode, Json<serde_json::Value>)> {
+    if id.is_empty() || id.len() > MAX_IDENTITY_BYTES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "id must be 1 to 2048 bytes" })),
+        ));
+    }
+    let profile = state.store().profile(&id);
+    let settled = profile.as_ref().and_then(|p| p.score.as_ref());
+    let effective = settled.and_then(|s| score::effective_score(s, now_unix()));
+    let tier = score::tier_for(effective.map(|s| s.fico_effective));
+    let config = state.policy_config();
+    let mut max_safe_spend = tier.max_safe_spend_usd(&config.caps, config.absolute_cap_usd);
+    // The gate blocks a safety pillar at or below the floor (row 5); a
+    // lookup that advertised a cap there would contradict it.
+    if settled.is_some_and(|s| s.pillars.safety <= config.safety_floor) {
+        max_safe_spend = 0.0;
+    }
+    Ok(Json(AgentLookup {
+        id,
+        rated: effective.is_some(),
+        tier: tier.as_str().to_string(),
+        fico_score: effective.map(|s| s.fico_effective),
+        score_age_days: effective.map(|s| s.age_days),
+        pillars: effective.and(settled.map(|s| s.pillars)),
+        score_source: effective.and(settled.map(|s| ScoreSource {
+            provider: "reppo",
+            eval_id: s.eval_id.clone(),
+            settled_at: iso8601_utc(s.settled_at_unix),
+        })),
+        max_safe_spend,
+        target_url: profile.map(|p| p.target_url),
+    }))
 }
 
 /// Queues a counterparty for a Reppo evaluation. Returns 202 with the queue
