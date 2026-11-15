@@ -436,7 +436,7 @@ fn gauge(effective: u64, raw: Option<u64>, decay: Option<u64>) -> String {
     // The label carries the same number as the visible text; only the drawn
     // bar is clamped to the track.
     let mut out = format!(
-        "<svg class=\"gauge\" viewBox=\"0 0 550 64\" role=\"img\" aria-label=\"Score {effective} on a scale from 300 to 850\" focusable=\"false\">\n\
+        "<svg class=\"gauge\" viewBox=\"0 0 550 70\" role=\"img\" aria-label=\"Score {effective} on a scale from 300 to 850\" focusable=\"false\">\n\
          <rect class=\"gauge-track\" x=\"0\" y=\"12\" width=\"550\" height=\"22\"/>\n\
          <rect class=\"gauge-fill\" x=\"0\" y=\"12\" width=\"{}\" height=\"22\"/>\n",
         position(effective)
@@ -445,7 +445,7 @@ fn gauge(effective: u64, raw: Option<u64>, decay: Option<u64>) -> String {
         let x = position(floor);
         out.push_str(&format!(
             "<line class=\"gauge-tick\" x1=\"{x}\" y1=\"6\" x2=\"{x}\" y2=\"40\"/>\n\
-             <text class=\"gauge-label\" x=\"{x}\" y=\"60\" text-anchor=\"middle\">{floor}</text>\n"
+             <text class=\"gauge-label\" x=\"{x}\" y=\"66\" text-anchor=\"middle\">{floor}</text>\n"
         ));
     }
     if let (Some(raw), Some(decay)) = (raw, decay) {
@@ -457,8 +457,8 @@ fn gauge(effective: u64, raw: Option<u64>, decay: Option<u64>) -> String {
         }
     }
     out.push_str(
-        "<text class=\"gauge-label\" x=\"0\" y=\"60\" text-anchor=\"start\">300</text>\n\
-         <text class=\"gauge-label\" x=\"550\" y=\"60\" text-anchor=\"end\">850</text>\n</svg>\n",
+        "<text class=\"gauge-label\" x=\"0\" y=\"66\" text-anchor=\"start\">300</text>\n\
+         <text class=\"gauge-label\" x=\"550\" y=\"66\" text-anchor=\"end\">850</text>\n</svg>\n",
     );
     out
 }

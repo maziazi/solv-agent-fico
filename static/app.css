@@ -188,9 +188,9 @@ tbody th { font-weight: 500; }
 .gauge-fill { fill: var(--ink); }
 .gauge-tick { stroke: var(--accent); stroke-width: 1; }
 .gauge-raw { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
-/* The viewBox is 550 units wide; at a 360px screen it scales to about 0.6, so
- * 18 units is about 11px on screen. */
-.gauge-label { fill: var(--muted); font-family: var(--font-mono); font-size: 18px; }
+/* The viewBox is 550 units wide; on a 360px screen the gauge is about 294px
+ * wide (scale 0.53), so 24 units is about 12.8px on screen. */
+.gauge-label { fill: var(--muted); font-family: var(--font-mono); font-size: 24px; }
 
 .reasons { list-style: none; margin: 0; padding: 0; }
 .reason { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
