@@ -13,6 +13,7 @@ pub mod score;
 pub mod state;
 pub mod tier1;
 pub mod tier2;
+pub mod web;
 
 use std::sync::Arc;
 
@@ -71,7 +72,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
         .route("/api/v1/receipt/{id}", get(receipt::get_receipt))
-        .route("/receipt/{id}", get(receipt::get_receipt))
+        .merge(web::routes())
         .with_state(state)
 }
 

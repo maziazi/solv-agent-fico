@@ -290,10 +290,10 @@ fn confidences(answers: &Map<String, Value>) -> Value {
     Value::Object(out)
 }
 
-/// `GET /api/v1/receipt/:id` and `GET /receipt/:id` (SPEC §7.3): the
-/// receipt as JSON — the original response plus the full evidence
-/// document and its creation time. Read-only and unauthenticated. The
-/// bare `/receipt/:id` route is the one PR-12 turns into the HTML page.
+/// `GET /api/v1/receipt/:id` (SPEC §7.3): the receipt as JSON — the original
+/// response plus the full evidence document and its creation time.
+/// Read-only and unauthenticated. The HTML page for the same receipt is
+/// `GET /receipt/:id`, rendered by `web::receipt_page`.
 pub async fn get_receipt(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let Some(receipt) = state.store().receipt(&id) else {
         return (
