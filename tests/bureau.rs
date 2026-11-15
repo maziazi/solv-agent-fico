@@ -1364,3 +1364,67 @@ async fn concurrent_enqueues_of_one_counterparty_admit_exactly_one() {
     assert_eq!(accepted.load(Ordering::SeqCst), 1);
     assert_eq!(duplicates.load(Ordering::SeqCst), 7);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_low_confidence_evaluation_is_charged_but_never_becomes_a_score() {
+    let (_dir, store) = store();
+    let mock = Arc::new(MockReppoClient::new(
+        vec![MockOutcome::SettledLowConfidence {
+            reppo_score: 0.0,
+            pillars: [5, 0, 5, 5],
+        }],
+        1,
+    ));
+    let (bureau, _worker) = spawn(mock, &store, funded());
+
+    let enqueued = bureau.enqueue(request("datafeed")).unwrap();
+    let status = wait_terminal(&bureau, &enqueued.job_id).await;
+
+    assert!(
+        matches!(&status, JobStatus::Inconclusive { eval_id, reppo_score }
+            if eval_id == "ev_mock_1" && *reppo_score == 0.0),
+        "{status:?}"
+    );
+    assert!(
+        store.profile("datafeed").is_none(),
+        "a score Reppo's own panel does not stand behind is not published"
+    );
+    assert!(store.learned_rules().is_empty(), "no rule from it either");
+    assert_eq!(
+        bureau.credits_remaining(),
+        FREE_TIER_CREDITS - CREDITS_PER_EVAL,
+        "Reppo charged for it, so the ledger must too"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_low_confidence_result_does_not_overwrite_an_earlier_score() {
+    let (_dir, store) = store();
+    let mock = Arc::new(MockReppoClient::new(
+        vec![
+            MockOutcome::Settled {
+                reppo_score: 78.0,
+                pillars: [7, 8, 9, 6],
+            },
+            MockOutcome::SettledLowConfidence {
+                reppo_score: 0.0,
+                pillars: [5, 0, 5, 5],
+            },
+        ],
+        1,
+    ));
+    let (bureau, _worker) = spawn(mock, &store, funded());
+
+    let first = bureau.enqueue(request("datafeed")).unwrap();
+    wait_terminal(&bureau, &first.job_id).await;
+    let second = bureau.enqueue(request("datafeed")).unwrap();
+    let status = wait_terminal(&bureau, &second.job_id).await;
+
+    assert!(
+        matches!(status, JobStatus::Inconclusive { .. }),
+        "{status:?}"
+    );
+    let score = store.profile("datafeed").unwrap().score.unwrap();
+    assert_eq!(score.reppo_score, 78.0, "the earlier settled score stands");
+    assert_eq!(score.eval_id, "ev_mock_1");
+}

@@ -127,6 +127,32 @@ pub struct SettledEval {
     /// `result.action.route` (`auto-ship`, `review`, `block`), kept for
     /// the receipt; the gate never reads it.
     pub route: Option<String>,
+    /// `result.confidence`. `None` when Reppo omitted it or sent a value
+    /// outside the three known ones; the worker then trusts the score as
+    /// before rather than guessing.
+    pub confidence: Option<Confidence>,
+}
+
+/// How far Reppo's own panel agrees with the score it returned. A `Low`
+/// result can be a single heavily weighted evaluator outvoting the rest
+/// (live evaluation of 2026-11-15: one evaluator at weight 1 scored 0, two
+/// at weight 0 scored 50), so it is not a score Solv may publish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
+impl Confidence {
+    fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -461,6 +487,10 @@ fn parse_settled(body: &Value) -> Result<SettledEval, ReppoError> {
         .get("route")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let confidence = result
+        .and_then(|result| result.get("confidence"))
+        .and_then(Value::as_str)
+        .and_then(Confidence::parse);
 
     Ok(SettledEval {
         reppo_score,
@@ -469,6 +499,7 @@ fn parse_settled(body: &Value) -> Result<SettledEval, ReppoError> {
         pillars,
         verdicts,
         route,
+        confidence,
     })
 }
 
@@ -695,6 +726,9 @@ pub enum MockOutcome {
     /// Settles with this Reppo score and pillar scores (order: reliability,
     /// track record, safety, maturity).
     Settled { reppo_score: f64, pillars: [u8; 4] },
+    /// As [`MockOutcome::Settled`], but Reppo's panel reports `confidence:
+    /// low` (charged, yet the score must not be published).
+    SettledLowConfidence { reppo_score: f64, pillars: [u8; 4] },
     /// As [`MockOutcome::Settled`], with an explicit `settledAt` (`None`
     /// models a response that omits it).
     SettledAt {
@@ -812,12 +846,22 @@ impl ReppoClient for MockReppoClient {
                 reppo_score,
                 pillars,
                 Some(crate::api::now_unix()),
+                None,
+            )),
+            MockOutcome::SettledLowConfidence {
+                reppo_score,
+                pillars,
+            } => Ok(mock_settled(
+                reppo_score,
+                pillars,
+                Some(crate::api::now_unix()),
+                Some(Confidence::Low),
             )),
             MockOutcome::SettledAt {
                 reppo_score,
                 pillars,
                 settled_at_unix,
-            } => Ok(mock_settled(reppo_score, pillars, settled_at_unix)),
+            } => Ok(mock_settled(reppo_score, pillars, settled_at_unix, None)),
             MockOutcome::Failed => Ok(EvalStatus::Failed(Some("mock failure".to_string()))),
             MockOutcome::FailedWith(reason) => Ok(EvalStatus::Failed(Some(reason))),
             MockOutcome::Unparsable => Err(ReppoError::Parse("mock: unparsable body".to_string())),
@@ -825,7 +869,12 @@ impl ReppoClient for MockReppoClient {
     }
 }
 
-fn mock_settled(reppo_score: f64, pillars: [u8; 4], settled_at_unix: Option<u64>) -> EvalStatus {
+fn mock_settled(
+    reppo_score: f64,
+    pillars: [u8; 4],
+    settled_at_unix: Option<u64>,
+    confidence: Option<Confidence>,
+) -> EvalStatus {
     let verdicts = PILLAR_CRITERIA
         .iter()
         .zip(pillars)
@@ -847,6 +896,7 @@ fn mock_settled(reppo_score: f64, pillars: [u8; 4], settled_at_unix: Option<u64>
         },
         verdicts,
         route: Some("review".to_string()),
+        confidence,
     }))
 }
 

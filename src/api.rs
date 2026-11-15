@@ -435,7 +435,7 @@ mod tests {
 
 /// The operator-facing note every 202 carries. It states the two hard
 /// constraints the queue cannot negotiate away (SPEC §5.3).
-const AUDIT_NOTE: &str = "Solv runs one audit at a time; the Eval Router panel usually returns a verdict within 30-90 seconds.";
+const AUDIT_NOTE: &str = "Solv runs one audit at a time. Reppo documents a verdict within 30-90 seconds; the one live run measured about 4.5 minutes.";
 
 #[derive(Debug, Deserialize)]
 pub struct AuditCounterpartyRequest {

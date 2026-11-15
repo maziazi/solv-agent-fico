@@ -13,9 +13,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use serde_json::{Value, json};
 use solv::reppo::{
-    CREDITS_PER_EVAL, EvalStatus, EvalSubmission, MAX_BODY_BYTES, MAX_INPUT_BYTES, ReppoClient,
-    ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix, parse_status_response,
-    sanitize_untrusted,
+    CREDITS_PER_EVAL, Confidence, EvalStatus, EvalSubmission, MAX_BODY_BYTES, MAX_INPUT_BYTES,
+    ReppoClient, ReppoError, ReppoHttpClient, SubmissionError, parse_rfc3339_unix,
+    parse_status_response, sanitize_untrusted,
 };
 
 fn submission() -> EvalSubmission {
@@ -594,5 +594,87 @@ fn the_client_only_loads_when_a_key_exists_and_the_operator_enabled_it() {
             ReppoHttpClient::from_vars(no_key, Some("1")).is_none(),
             "key {no_key:?} must not load"
         );
+    }
+}
+
+/// The body of the one live evaluation (2026-11-15, `taskType: claim`),
+/// trimmed to the fields Solv reads plus the ones it must ignore.
+fn live_low_confidence_body() -> Value {
+    json!({
+        "id": "cmwhxfvbg000708l8j4dsfw4c",
+        "taskType": "claim",
+        "status": "COMPLETED",
+        "score": 0,
+        "route": "review",
+        "creditsCharged": 440,
+        "completedAt": "2026-11-15T14:30:10.565Z",
+        "result": {
+            "score": 0,
+            "decision": "reject",
+            "confidence": "low",
+            "route": "review",
+            "reason": "score 0 < passAt 70 -> decision reject; score < rejectBelow 60, but confidence low < required medium -> review",
+            "rubric_scores": { "accuracy": 0, "evidence": 0, "precision": 0 },
+            "gates": [],
+            "consensus": {
+                "weighting": "economic (net veREPPO)",
+                "economic_score": 0,
+                "equal_weight_score": 33,
+                "score_spread": 23.6
+            }
+        }
+    })
+}
+
+#[test]
+fn the_live_low_confidence_body_parses_and_keeps_its_confidence() {
+    let EvalStatus::Settled(eval) =
+        parse_status_response(&live_low_confidence_body()).expect("live body parses")
+    else {
+        panic!("a COMPLETED body must settle");
+    };
+    assert_eq!(eval.reppo_score, 0.0);
+    assert_eq!(eval.credits_charged, 440);
+    assert_eq!(eval.route.as_deref(), Some("review"));
+    assert_eq!(eval.confidence, Some(Confidence::Low));
+    // accuracy and evidence feed the track-record pillar; the three
+    // dimensions cover nothing else, so the rest sit at the neutral 5.
+    assert_eq!(
+        (
+            eval.pillars.reliability,
+            eval.pillars.track_record,
+            eval.pillars.safety,
+            eval.pillars.maturity
+        ),
+        (5, 0, 5, 5)
+    );
+}
+
+#[test]
+fn a_missing_or_unknown_confidence_is_none_not_a_guess() {
+    for confidence in [None, Some("certain"), Some("")] {
+        let mut body = live_low_confidence_body();
+        match confidence {
+            Some(value) => body["result"]["confidence"] = json!(value),
+            None => {
+                body["result"].as_object_mut().unwrap().remove("confidence");
+            }
+        }
+        let EvalStatus::Settled(eval) = parse_status_response(&body).unwrap() else {
+            panic!("a COMPLETED body must settle");
+        };
+        assert_eq!(eval.confidence, None, "confidence {confidence:?}");
+    }
+    for (raw, expected) in [
+        ("LOW", Confidence::Low),
+        ("Medium", Confidence::Medium),
+        ("high", Confidence::High),
+    ] {
+        let mut body = live_low_confidence_body();
+        body["result"]["confidence"] = json!(raw);
+        let EvalStatus::Settled(eval) = parse_status_response(&body).unwrap() else {
+            panic!("a COMPLETED body must settle");
+        };
+        assert_eq!(eval.confidence, Some(expected));
     }
 }
