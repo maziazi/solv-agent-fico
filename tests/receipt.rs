@@ -248,7 +248,7 @@ fn approve_decision() -> Decision {
     Decision {
         kind: DecisionKind::Approve,
         reasons: vec![Reason::from_code(ReasonCode::Score010)],
-        tier: Tier::Prime,
+        tier: Tier::Exceptional,
         max_safe_spend_usd: 500.0,
         effective_score: None,
     }
@@ -307,7 +307,8 @@ fn evidence_carries_every_section_of_spec_6_3() {
     assert_eq!(evidence["tier2"]["guard_triggered"], false);
     assert_eq!(evidence["rules_applied"], json!([]));
     assert_eq!(evidence["ruleset_version"], RULESET_VERSION);
-    assert_eq!(evidence["policy_config"]["block_floor"], 550);
+    // block_floor is pinned to the FAIR band floor (SPEC §4.3).
+    assert_eq!(evidence["policy_config"]["block_floor"], 580);
     assert_eq!(evidence["decision"]["decision"], "APPROVE");
     assert_eq!(evidence["decision"]["reasons"][0]["code"], "SOLV-SCORE-010");
     assert_eq!(evidence["decision"]["max_safe_spend"], 500.0);

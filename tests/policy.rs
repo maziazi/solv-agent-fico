@@ -189,6 +189,19 @@ fn row5_low_safety_pillar_blocks() {
 }
 
 #[test]
+fn the_block_boundary_crosses_exactly_at_the_fair_floor() {
+    // 580 is both the FAIR band floor and the block floor: one Reppo point
+    // apart, the gate must change rows — and only there. 50.5 → FICO 578
+    // (POOR, blocks); 50.9 → FICO 580 (FAIR, approves at a small amount).
+    let below = profile(Some(settled(50.5, 9, 3)));
+    let at = profile(Some(settled(50.9, 9, 3)));
+    let below_decision = run(&request(2.0), Some(&below), &tier1_clean(), None, &[], 10);
+    let at_decision = run(&request(2.0), Some(&at), &tier1_clean(), None, &[], 10);
+    assert_eq!(below_decision.reasons[0].code, ReasonCode::Score001);
+    assert_eq!(at_decision.reasons[0].code, ReasonCode::Score010);
+}
+
+#[test]
 fn row6_score_below_block_floor_blocks() {
     let profile = profile(Some(settled(20.0, 9, 3)));
     let decision = run(
@@ -316,7 +329,7 @@ fn row10_tier_cap_holds() {
         &[],
         10,
     );
-    assert_eq!(decision.tier, Tier::Standard);
+    assert_eq!(decision.tier, Tier::Fair);
     assert_eq!(decision.kind, DecisionKind::Hold);
     assert_eq!(decision.reasons[0].code, ReasonCode::Limit001);
 }
@@ -358,11 +371,11 @@ fn row11_tier2_mismatch_holds() {
 }
 
 #[test]
-fn row12_clean_prime_approves_with_reasons() {
+fn row12_clean_good_band_approves_with_reasons() {
     let decision = clean_case(50.0);
     assert_eq!(decision.kind, DecisionKind::Approve);
-    assert_eq!(decision.tier, Tier::Prime);
-    assert_eq!(decision.max_safe_spend_usd, 500.0);
+    assert_eq!(decision.tier, Tier::Good);
+    assert_eq!(decision.max_safe_spend_usd, 50.0);
     assert_eq!(decision.reasons[0].code, ReasonCode::Score010);
     assert!(decision.reasons[0].message.contains("safety 9/10"));
     assert!(decision.satisfies_g5(), "APPROVE must be explained too");
@@ -414,7 +427,7 @@ fn safety_floor_outranks_score_floor() {
 
 #[test]
 fn limit_outranks_tier2_revise() {
-    let profile = profile(Some(settled(67.0, 9, 3))); // STANDARD
+    let profile = profile(Some(settled(67.0, 9, 3))); // FAIR, cap 5
     let tier2 = Tier2Signals {
         outcome: Tier2Outcome::Verdict(Tier2Verdict::Revise),
     };
@@ -558,7 +571,7 @@ fn escalation_rules_match_spec_5_1() {
     assert!(needs_escalation(
         &request(50.0),
         &Tier1Signals::unavailable(),
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     // Certain injection: skip Tier 2 entirely.
@@ -571,7 +584,7 @@ fn escalation_rules_match_spec_5_1() {
     assert!(!needs_escalation(
         &request(50.0),
         &certain,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     // Uncertain band 0.10–0.90.
@@ -584,7 +597,7 @@ fn escalation_rules_match_spec_5_1() {
     assert!(needs_escalation(
         &request(50.0),
         &uncertain,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     // Low risk-class confidence.
@@ -597,7 +610,7 @@ fn escalation_rules_match_spec_5_1() {
     assert!(needs_escalation(
         &request(50.0),
         &low_conf,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     // Cold start.
@@ -613,27 +626,27 @@ fn escalation_rules_match_spec_5_1() {
     assert!(needs_escalation(
         &long,
         &clean_tier1,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     // Borderline amount: above the cap, under twice the cap.
     assert!(needs_escalation(
         &request(600.0),
         &clean_tier1,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     assert!(!needs_escalation(
         &request(1_100.0),
         &clean_tier1,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
     // Clean, confident, short, in-cap: no escalation.
     assert!(!needs_escalation(
         &request(50.0),
         &clean_tier1,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
 }
@@ -672,7 +685,7 @@ fn non_positive_amounts_are_refused() {
 #[test]
 fn fired_hold_rule_stays_visible_when_another_row_holds() {
     // Tier cap (row 10) holds first; the learned rule must still appear.
-    let profile = profile(Some(settled(67.0, 9, 3))); // STANDARD, cap 100
+    let profile = profile(Some(settled(67.0, 9, 3))); // FAIR, cap 5
     let rules = vec![FiredRule {
         rule_id: "015".to_string(),
         effect: RuleEffect::ForcedHold,
@@ -712,7 +725,7 @@ fn unparsed_tier1_escalates_so_tier2_can_cover() {
     assert!(needs_escalation(
         &request(50.0),
         &unparsed,
-        Tier::Prime,
+        Tier::Exceptional,
         &PolicyConfig::default()
     ));
 }

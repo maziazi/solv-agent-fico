@@ -99,9 +99,9 @@ the three decision values in `docs/SPEC.md` §4.3.
 
 | Decision | Text | Background | Also means |
 | --- | --- | --- | --- |
-| `APPROVE` | `#15803D` | `#DCFCE7` | `PRIME` tier, FICO ≥ 720 |
+| `APPROVE` | `#15803D` | `#DCFCE7` | `EXCEPTIONAL`/`VERY_GOOD` tier |
 | `HOLD` | `#B45309` | `#FEF3C7` | `UNRATED`, cold start, cap exceeded |
-| `BLOCK` | `#B91C1C` | `#FEE2E2` | `HIGH_RISK`, injection detected |
+| `BLOCK` | `#B91C1C` | `#FEE2E2` | `POOR`, injection detected |
 
 Colour is never the only signal. Every decision badge carries its word, and
 every reason row carries its code. A red badge with no text fails for colour-blind
@@ -254,7 +254,7 @@ pass rate instead — a real number with a real denominator.
 | **Pipeline node** | Row: name (Inter), elapsed ms (mono, right-aligned), state glyph, optional detail. Skipped nodes are `#5C5B57` with their reason. |
 | **Reason row** | Code (mono `micro`), message (Inter `body`), effect chip, evidence block if present |
 | **Evidence block** | `#F8F7F4` fill, 1px dashed border, mono, prefixed by the label `untrusted counterparty text` |
-| **FICO gauge** | Horizontal track 300→850, tick marks at the four tier floors (550, 640, 720), filled to `fico_effective`, `fico_raw` marked with a hairline when decay is nonzero |
+| **FICO gauge** | Horizontal track 300→850, tick marks at the four band floors (580, 670, 740, 800), filled to `fico_effective`, `fico_raw` marked with a hairline when decay is nonzero |
 | **Primary button** | `#A8431F` fill, white text, 1px darker border |
 | **Focus ring** | 2px `#D95D39` offset 2px. Never removed. |
 

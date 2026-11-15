@@ -7,10 +7,7 @@ import type { JSX } from "react";
 import type { Pillars, ScoreSource } from "../types";
 import { score } from "../format";
 import { TierBadge } from "./Badges";
-
-const TRACK_MIN = 300;
-const TRACK_MAX = 850;
-const TIER_FLOORS = [550, 640, 720];
+import { BAND_FLOORS, TRACK_MAX, TRACK_MIN } from "../bands";
 
 function pct(value: number): number {
   return ((value - TRACK_MIN) / (TRACK_MAX - TRACK_MIN)) * 100;
@@ -26,7 +23,7 @@ function Gauge({ fico, raw, decay }: { fico: number; raw: number | null; decay: 
     >
       <div className="relative h-3 border border-border bg-bg">
         <div className="absolute inset-y-0 left-0 bg-ink" style={{ width: `${fill}%` }} />
-        {TIER_FLOORS.map((floor) => (
+        {BAND_FLOORS.map((floor) => (
           <div
             key={floor}
             aria-hidden
@@ -44,11 +41,11 @@ function Gauge({ fico, raw, decay }: { fico: number; raw: number | null; decay: 
         )}
       </div>
       <div className="mt-1 flex justify-between font-mono text-xs text-muted">
-        <span>300</span>
-        <span>550</span>
-        <span>640</span>
-        <span>720</span>
-        <span>850</span>
+        <span>{TRACK_MIN}</span>
+        {BAND_FLOORS.map((floor) => (
+          <span key={floor}>{floor}</span>
+        ))}
+        <span>{TRACK_MAX}</span>
       </div>
     </div>
   );

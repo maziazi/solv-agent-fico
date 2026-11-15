@@ -197,7 +197,7 @@ pub async fn pre_spend_check(
     let tier = score::tier_for(effective.map(|s| s.fico_effective));
 
     // Tier 1 — the single reflex call.
-    let config = crate::policy::PolicyConfig::default();
+    let config = *state.policy_config();
     let clef_state = ClefState {
         counterparty_name: request.counterparty_name.clone(),
         target_url: request.target_url.clone(),

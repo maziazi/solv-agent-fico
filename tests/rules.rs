@@ -302,22 +302,36 @@ fn a_hand_edited_rule_id_cannot_inject_into_a_question_key() {
 #[test]
 fn ruleset_version_moves_only_when_the_active_set_changes() {
     let (_dir, store) = store();
-    assert_eq!(store.compiled_rules().ruleset_version, 1);
+    assert_eq!(
+        store.compiled_rules().ruleset_version,
+        solv::receipt::RULESET_VERSION
+    );
 
     let rule_id = add_refund_rule(&store);
     assert_eq!(
         store.compiled_rules().ruleset_version,
-        1,
+        solv::receipt::RULESET_VERSION,
         "a new shadow rule changes nothing in force"
     );
 
     assert!(store.set_learned_rule_status(&rule_id, RuleStatus::Active));
-    assert_eq!(store.compiled_rules().ruleset_version, 2);
+    assert_eq!(
+        store.compiled_rules().ruleset_version,
+        solv::receipt::RULESET_VERSION + 1
+    );
     assert!(store.set_learned_rule_status(&rule_id, RuleStatus::Active));
-    assert_eq!(store.compiled_rules().ruleset_version, 2, "no real change");
+    assert_eq!(
+        store.compiled_rules().ruleset_version,
+        solv::receipt::RULESET_VERSION + 1,
+        "no real change"
+    );
 
     assert!(store.set_learned_rule_status(&rule_id, RuleStatus::Shadow));
-    assert_eq!(store.compiled_rules().ruleset_version, 3, "demotion counts");
+    assert_eq!(
+        store.compiled_rules().ruleset_version,
+        solv::receipt::RULESET_VERSION + 2,
+        "demotion counts"
+    );
     assert!(!store.set_learned_rule_status("SOLV-RULE-999", RuleStatus::Active));
 }
 
@@ -445,7 +459,7 @@ fn a_snapshot_from_before_rule_compilation_still_loads() {
         compiled.questions.is_empty(),
         "a rule without a topic is never asked"
     );
-    assert_eq!(compiled.ruleset_version, 1);
+    assert_eq!(compiled.ruleset_version, solv::receipt::RULESET_VERSION);
 }
 
 #[test]
@@ -463,7 +477,11 @@ fn rules_and_the_epoch_survive_a_restart() {
     assert_eq!(reopened.learned_rules(), before);
     let compiled = reopened.compiled_rules();
     assert_eq!(compiled.questions.len(), 1);
-    assert_eq!(compiled.ruleset_version, 2, "the epoch is persisted");
+    assert_eq!(
+        compiled.ruleset_version,
+        solv::receipt::RULESET_VERSION + 1,
+        "the epoch is persisted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +619,10 @@ fn promoted_refund_rule(store: &Store) -> String {
 async fn an_active_rule_rides_the_tier1_call_and_a_firing_rule_holds_with_its_code() {
     let (_dir, store) = store();
     promoted_refund_rule(&store);
-    let clef = RecordingClef::new(json!({ "rule_001": { "probability_true": 0.93 } }));
+    // The scripted answer uses the LIVE wire shape: the probability of a
+    // noul answer rides a `noul` key (verified against the real endpoint
+    // on 2026-11-15).
+    let clef = RecordingClef::new(json!({ "rule_001": { "type": "noul", "noul": 0.93 } }));
     let router = router(&store, Arc::clone(&clef));
 
     let (status, body) = post(&router).await;
@@ -618,16 +639,21 @@ async fn an_active_rule_rides_the_tier1_call_and_a_firing_rule_holds_with_its_co
 
     assert_eq!(body["decision"], "HOLD");
     assert_eq!(body["reasons"][0]["code"], "SOLV-RULE-001");
-    assert_eq!(body["ruleset_version"], 2);
+    assert_eq!(body["ruleset_version"], solv::receipt::RULESET_VERSION + 1);
 
     let stored = receipt(&router, &body).await;
     assert_eq!(
         stored["evidence"]["rules_applied"],
         json!(["SOLV-RULE-001"])
     );
-    assert_eq!(stored["evidence"]["ruleset_version"], 2);
     assert_eq!(
-        stored["evidence"]["tier1"]["answers"]["rule_001"]["probability_true"], 0.93,
+        stored["evidence"]["ruleset_version"],
+        solv::receipt::RULESET_VERSION + 1
+    );
+    // The live wire shape rides through to the sealed evidence: the rule's
+    // probability lives under `noul` exactly as the real endpoint writes it.
+    assert_eq!(
+        stored["evidence"]["tier1"]["answers"]["rule_001"]["noul"], 0.93,
         "the rule's answer is part of the sealed evidence"
     );
     assert_eq!(
@@ -666,7 +692,7 @@ async fn a_shadow_rule_is_not_asked_and_cannot_fire() {
         4,
         "shadow rules stay off the hot path"
     );
-    assert_eq!(body["ruleset_version"], 1);
+    assert_eq!(body["ruleset_version"], solv::receipt::RULESET_VERSION);
     let stored = receipt(&router, &body).await;
     assert_eq!(stored["evidence"]["rules_applied"], json!([]));
 }
@@ -957,19 +983,22 @@ fn a_snapshot_with_an_unknown_topic_still_opens_and_the_rule_is_not_compiled() {
 #[test]
 fn replacing_the_whole_rule_set_moves_the_version_when_the_active_set_changes() {
     let (_dir, store) = store();
-    assert_eq!(store.compiled_rules().ruleset_version, 1);
+    assert_eq!(
+        store.compiled_rules().ruleset_version,
+        solv::receipt::RULESET_VERSION
+    );
 
     store.set_learned_rules(vec![active_rule(1, RuleTopic::UrgencyPressure)]);
     assert_eq!(
         store.compiled_rules().ruleset_version,
-        2,
+        solv::receipt::RULESET_VERSION + 1,
         "empty to one active rule is a change in force"
     );
 
     store.set_learned_rules(vec![active_rule(1, RuleTopic::UrgencyPressure)]);
     assert_eq!(
         store.compiled_rules().ruleset_version,
-        2,
+        solv::receipt::RULESET_VERSION + 1,
         "same set, same version"
     );
 
@@ -981,7 +1010,7 @@ fn replacing_the_whole_rule_set_moves_the_version_when_the_active_set_changes() 
     ]);
     assert_eq!(
         store.compiled_rules().ruleset_version,
-        3,
+        solv::receipt::RULESET_VERSION + 2,
         "a different active set"
     );
 
@@ -989,7 +1018,7 @@ fn replacing_the_whole_rule_set_moves_the_version_when_the_active_set_changes() 
     store.set_learned_rules(vec![shadowed]);
     assert_eq!(
         store.compiled_rules().ruleset_version,
-        4,
+        solv::receipt::RULESET_VERSION + 3,
         "back to nothing in force"
     );
 }
@@ -1004,7 +1033,7 @@ fn promoting_a_rule_that_cannot_compile_changes_nothing_in_force() {
     assert!(store.set_learned_rule_status("SOLV-RULE-001", RuleStatus::Active));
     assert_eq!(
         store.compiled_rules().ruleset_version,
-        1,
+        solv::receipt::RULESET_VERSION,
         "a rule that cannot compile is not in force"
     );
 }
@@ -1128,7 +1157,10 @@ fn a_tie_between_topics_creates_no_rule_and_is_counted() {
 async fn a_fired_rule_reason_names_the_topic_question_answer_and_threshold() {
     let (_dir, store) = store();
     promoted_refund_rule(&store);
-    let clef = RecordingClef::new(json!({ "rule_001": { "probability_true": 0.93 } }));
+    // The scripted answer uses the LIVE wire shape: the probability of a
+    // noul answer rides a `noul` key (verified against the real endpoint
+    // on 2026-11-15).
+    let clef = RecordingClef::new(json!({ "rule_001": { "type": "noul", "noul": 0.93 } }));
     let router = router(&store, clef);
 
     let (_, body) = post(&router).await;
@@ -1246,7 +1278,10 @@ fn sixteen_threads_adding_rules_create_exactly_one_per_topic() {
 async fn a_receipt_carrying_rule_evidence_verifies_with_the_reference_script() {
     let (_dir, store) = store();
     promoted_refund_rule(&store);
-    let clef = RecordingClef::new(json!({ "rule_001": { "probability_true": 0.93 } }));
+    // The scripted answer uses the LIVE wire shape: the probability of a
+    // noul answer rides a `noul` key (verified against the real endpoint
+    // on 2026-11-15).
+    let clef = RecordingClef::new(json!({ "rule_001": { "type": "noul", "noul": 0.93 } }));
     let router = router(&store, clef);
     let (_, body) = post(&router).await;
     let stored = receipt(&router, &body).await;

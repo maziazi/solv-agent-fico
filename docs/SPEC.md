@@ -298,15 +298,32 @@ of a false claim.
 
 | Tier | `fico_effective` | `max_safe_spend` (USD) | Default decision |
 | --- | --- | --- | --- |
-| `PRIME` | ≥ 720 | 500.00 | `APPROVE` if amount ≤ cap |
-| `STANDARD` | 640–719 | 100.00 | `APPROVE` if amount ≤ cap |
-| `SUBPRIME` | 550–639 | 10.00 | `APPROVE` if amount ≤ cap |
-| `HIGH_RISK` | < 550 | 0.00 | `BLOCK` |
+| `EXCEPTIONAL` | ≥ 800 | operator ceiling (default 500.00) | `APPROVE` if amount ≤ cap |
+| `VERY_GOOD` | 740–799 | 250.00 | `APPROVE` if amount ≤ cap |
+| `GOOD` | 670–739 | 50.00 | `APPROVE` if amount ≤ cap |
+| `FAIR` | 580–669 | 5.00 | `APPROVE` if amount ≤ cap |
+| `POOR` | < 580 | 0.00 | `BLOCK` |
 | `UNRATED` | no settled score | 0.00 | `HOLD` |
+
+*(Reason for the 2026-11-15 change, recorded here per the hard prohibition on
+silent mapping changes: the old PRIME/STANDARD/SUBPRIME/HIGH_RISK names were
+calibrated to no published reference — their boundaries could not be checked
+against anything. The bands are now the public FICO band boundaries
+(580 / 670 / 740 / 800), so a reader can verify them against a standard
+reference. They remain **not calibrated against outcomes**; the words above
+about what that means travel with every receipt. `UNRATED` stays a state,
+never folded into a band. The evidence layout changed with the caps, so
+`RULESET_VERSION` is bumped 1 → 2 and receipts sealed before this change
+remain readable but carry the old tier vocabulary.)*
 
 The caps in this table are operator-configurable defaults, not hardcoded
 constants. Whichever values were active when a decision was made are folded into
 `ruleset_version` and `evidence_sha256`.
+
+The boundaries are the published FICO band boundaries, chosen so a reader can
+check them against a public reference. They are *not* calibrated against
+outcomes: nothing in Solv yet proves a `GOOD` counterparty defrauds less often
+than a `FAIR` one. The bands make the numbers checkable, not predictive.
 
 Solv's three decision values line up with Reppo's `result.action.route`. The
 alignment is deliberate, so a Reppo verdict maps across without interpretation:
@@ -352,7 +369,7 @@ The standard Tier 1 call carries four fixed questions, plus learned rules
     "service_description": "<untrusted data, delimited>",
     "known_profile": {
       "fico_effective": 729,
-      "tier": "PRIME",
+      "tier": "VERY_GOOD",
       "age_days": 12,
       "pillars": { "reliability": 8, "track_record": 7, "safety": 9, "maturity": 7 }
     }
@@ -869,7 +886,7 @@ Response:
   "fico_raw": 410,
   "decay": 0,
   "score_age_days": 3,
-  "tier": "HIGH_RISK",
+  "tier": "POOR",
   "max_safe_spend": 0.0,
   "pillars": { "reliability": 3, "track_record": 2, "safety": 2, "maturity": 4 },
   "score_source": {
@@ -1085,6 +1102,10 @@ An honest list of what has no evidence behind it as of this writing.
   after folding. What stays unproven is the live providers' behaviour on these
   layerings — mocks stand in for the real detectors, so the live claim is only
   as strong as the mocks are faithful.
+- The band boundaries in §4.3 (580 / 670 / 740 / 800). They are published FICO
+  boundaries, chosen to be checkable against a public reference; whether they
+  are the *right* boundaries for fraud prevention is unmeasured until the
+  Attack Lab and real audits produce labelled outcomes.
 - Reppo's credit price beyond the free tier. Unpublished, so the Verified Badge
   unit economics cannot be closed.
 - Whether real demand exists. Four projects in a single hackathon attacked the

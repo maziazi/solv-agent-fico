@@ -27,6 +27,26 @@ pub const MODEL_NAME: &str = "clef-flash";
 /// (SPEC §2.1); a hung call must become an error, not a slow response.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(250);
 
+/// Operator override for the Tier-1 call timeout (`SOLV_TIER1_TIMEOUT_MS`).
+/// The SPEC §2.1 budgets assume a network where Clef answers well under
+/// 250 ms; on a slower route an operator may raise the ceiling and accept
+/// that the §2.1 targets cannot hold from there.
+pub const TIMEOUT_ENV: &str = "SOLV_TIER1_TIMEOUT_MS";
+
+fn timeout_from_env() -> Duration {
+    timeout_from_var(std::env::var(TIMEOUT_ENV).ok().as_deref())
+}
+
+fn timeout_from_var(raw: Option<&str>) -> Duration {
+    match raw {
+        None | Some("") | Some("0") => DEFAULT_TIMEOUT,
+        Some(raw) => raw
+            .parse::<u64>()
+            .map(|ms| Duration::from_millis(ms.max(1)))
+            .unwrap_or(DEFAULT_TIMEOUT),
+    }
+}
+
 /// The `known_profile` block of `state` (SPEC §5.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KnownProfile {
@@ -252,7 +272,11 @@ impl ClefResponse {
     pub fn noul_answer(&self, key: &str) -> Option<f64> {
         self.answers
             .get(key)
-            .and_then(|answer| answer.get("probability_true"))
+            .and_then(|answer| {
+                answer
+                    .get("probability_true")
+                    .or_else(|| answer.get("noul"))
+            })
             .and_then(Value::as_f64)
     }
 
@@ -358,7 +382,7 @@ impl CloudflareClefClient {
     pub fn from_env() -> Option<Self> {
         let account_id = std::env::var("CLOUDFLARE_ACCOUNT_ID").ok()?;
         let api_token = std::env::var("CLOUDFLARE_API_TOKEN").ok()?;
-        Self::new(account_id, api_token, DEFAULT_TIMEOUT).ok()
+        Self::new(account_id, api_token, timeout_from_env()).ok()
     }
 }
 
@@ -413,9 +437,12 @@ pub enum MockFailure {
 impl MockClefClient {
     pub fn with_injection(probability_true: f64) -> Self {
         let mut answers = Map::new();
+        // The live Clef-flash wire shape (verified 2026-11-15 against the
+        // real endpoint): the probability of a `noul` answer rides a
+        // `noul` key, not `probability_true`. noul_answer accepts both.
         answers.insert(
             "injection".to_string(),
-            json!({ "probability_true": probability_true }),
+            json!({ "type": "noul", "noul": probability_true }),
         );
         answers.insert(
             "risk_class".to_string(),
@@ -455,5 +482,78 @@ pub struct UnconfiguredClefClient;
 impl ClefClient for UnconfiguredClefClient {
     async fn ask(&self, _request: &ClefRequest) -> Result<ClefResponse, ClefError> {
         Err(ClefError::Unconfigured)
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn the_timeout_var_overrides_the_spec_default() {
+        assert_eq!(timeout_from_var(None), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_var(Some("")), DEFAULT_TIMEOUT);
+        assert_eq!(
+            timeout_from_var(Some("0")),
+            DEFAULT_TIMEOUT,
+            "0 means default"
+        );
+        assert_eq!(
+            timeout_from_var(Some("3000")),
+            Duration::from_millis(3000),
+            "operator raises the ceiling on a slower route"
+        );
+        assert_eq!(timeout_from_var(Some("not-a-number")), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_var(Some("1")), Duration::from_millis(1));
+    }
+}
+
+#[cfg(test)]
+mod wire_shape_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The real Clef-flash answer shapes captured live on 2026-11-15
+    /// (receipt evidence, injection probe): noul answers carry their
+    /// probability under a `noul` key, choice answers carry
+    /// `choice`/`confidence` exactly as SPEC §5.1 shows. The parser must
+    /// never regress to the mock-only shape.
+    #[test]
+    fn the_live_wire_shape_parses() {
+        let answers: Map<String, Value> = [
+            ("injection", json!({ "type": "noul", "noul": 0.9656 })),
+            (
+                "risk_class",
+                json!({
+                    "type": "choice",
+                    "choice": "coercion",
+                    "confidence": 0.24,
+                    "probabilities": { "coercion": 0.5317 }
+                }),
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let response = ClefResponse { answers };
+        assert_eq!(
+            response.injection_probability_true(),
+            Some(0.9656),
+            "the noul key is the live probability"
+        );
+        let (class, confidence) = response.risk_class().expect("risk class parses");
+        assert_eq!(class, RiskClass::Coercion);
+        assert!((confidence - 0.24).abs() < 1e-9);
+        assert!(response.to_signals().has_verdict());
+    }
+
+    #[test]
+    fn the_mock_shape_still_parses_for_backwards_compatibility() {
+        let answers: Map<String, Value> = [("injection", json!({ "probability_true": 0.97 }))]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let response = ClefResponse { answers };
+        assert_eq!(response.injection_probability_true(), Some(0.97));
     }
 }

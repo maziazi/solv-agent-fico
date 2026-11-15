@@ -100,9 +100,11 @@ async fn clean_prime_request_approves_with_reasons_and_latency() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["decision"], "APPROVE");
-    assert_eq!(body["tier"], "PRIME");
+    assert_eq!(body["tier"], "GOOD");
     assert_eq!(body["fico_score"], 729);
-    assert_eq!(body["max_safe_spend"], 500.0);
+    // 729 lands in the GOOD band: cap $50 (SPEC §4.3), and amount == cap
+    // is inside it.
+    assert_eq!(body["max_safe_spend"], 50.0);
     assert!(body["receipt_id"].as_str().unwrap().starts_with("slv_"));
     assert!(body["receipt_url"].as_str().unwrap().len() > 5);
 

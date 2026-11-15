@@ -65,39 +65,55 @@ fn effective_score_floors_at_300() {
 
 #[test]
 fn tier_boundaries_match_the_spec_table() {
-    assert_eq!(tier_for(Some(720)), Tier::Prime);
-    assert_eq!(tier_for(Some(850)), Tier::Prime);
-    assert_eq!(tier_for(Some(719)), Tier::Standard);
-    assert_eq!(tier_for(Some(640)), Tier::Standard);
-    assert_eq!(tier_for(Some(639)), Tier::Subprime);
-    assert_eq!(tier_for(Some(550)), Tier::Subprime);
-    assert_eq!(tier_for(Some(549)), Tier::HighRisk);
-    assert_eq!(tier_for(Some(300)), Tier::HighRisk);
+    // The published FICO band boundaries (SPEC §4.3): 580 / 670 / 740 / 800.
+    // Exhaustive two-sided coverage lives in score.rs's own suite; this file
+    // pins the same rows the SPEC table prints.
+    assert_eq!(tier_for(Some(850)), Tier::Exceptional);
+    assert_eq!(tier_for(Some(800)), Tier::Exceptional);
+    assert_eq!(tier_for(Some(799)), Tier::VeryGood);
+    assert_eq!(tier_for(Some(740)), Tier::VeryGood);
+    assert_eq!(tier_for(Some(739)), Tier::Good);
+    assert_eq!(tier_for(Some(670)), Tier::Good);
+    assert_eq!(tier_for(Some(669)), Tier::Fair);
+    assert_eq!(tier_for(Some(580)), Tier::Fair);
+    assert_eq!(tier_for(Some(579)), Tier::Poor);
+    assert_eq!(tier_for(Some(300)), Tier::Poor);
     assert_eq!(tier_for(None), Tier::Unrated);
 }
 
 #[test]
 fn default_caps_match_the_spec_table() {
     let caps = Caps::default();
-    assert_eq!(caps.prime_usd, 500.00);
-    assert_eq!(caps.standard_usd, 100.00);
-    assert_eq!(caps.subprime_usd, 10.00);
-    assert_eq!(Tier::Prime.max_safe_spend_usd(&caps), 500.00);
-    assert_eq!(Tier::Standard.max_safe_spend_usd(&caps), 100.00);
-    assert_eq!(Tier::Subprime.max_safe_spend_usd(&caps), 10.00);
-    assert_eq!(Tier::HighRisk.max_safe_spend_usd(&caps), 0.00);
-    assert_eq!(Tier::Unrated.max_safe_spend_usd(&caps), 0.00);
+    let absolute = 500.00; // PolicyConfig::default().absolute_cap_usd
+    assert_eq!(caps.fair_usd, 5.00);
+    assert_eq!(caps.good_usd, 50.00);
+    assert_eq!(caps.very_good_usd, 250.00);
+    assert_eq!(Tier::Poor.max_safe_spend_usd(&caps, absolute), 0.00);
+    assert_eq!(Tier::Fair.max_safe_spend_usd(&caps, absolute), 5.00);
+    assert_eq!(Tier::Good.max_safe_spend_usd(&caps, absolute), 50.00);
+    assert_eq!(Tier::VeryGood.max_safe_spend_usd(&caps, absolute), 250.00);
+    // Exceptional reads the operator's ceiling — it never carries its own
+    // number that could be configured above the hard limit.
+    assert_eq!(
+        Tier::Exceptional.max_safe_spend_usd(&caps, absolute),
+        500.00
+    );
+    assert_eq!(Tier::Unrated.max_safe_spend_usd(&caps, absolute), 0.00);
 }
 
 #[test]
 fn operator_caps_override_defaults() {
     let caps = Caps {
-        prime_usd: 250.0,
-        standard_usd: 50.0,
-        subprime_usd: 5.0,
+        fair_usd: 250.0,
+        good_usd: 50.0,
+        very_good_usd: 5.0,
     };
-    assert_eq!(Tier::Prime.max_safe_spend_usd(&caps), 250.0);
-    assert_eq!(Tier::HighRisk.max_safe_spend_usd(&caps), 0.0);
+    let absolute = 500.00;
+    assert_eq!(Tier::Fair.max_safe_spend_usd(&caps, absolute), 250.0);
+    assert_eq!(Tier::Good.max_safe_spend_usd(&caps, absolute), 50.0);
+    assert_eq!(Tier::Poor.max_safe_spend_usd(&caps, absolute), 0.0);
+    // The top band follows the ceiling, not the caps, whatever the caps say.
+    assert_eq!(Tier::Exceptional.max_safe_spend_usd(&caps, absolute), 500.0);
 }
 
 #[test]

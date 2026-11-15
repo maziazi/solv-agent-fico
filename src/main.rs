@@ -101,7 +101,23 @@ async fn main() {
         );
     }
 
-    let state = AppState::new(store, tier1, tier2).with_bureau(bureau);
+    // The §2.1 latency ceiling stays the SPEC default unless the operator
+    // raises it for a slower route (SOLV_LATENCY_CEILING_MS).
+    let mut policy_config = solv::policy::PolicyConfig::default();
+    match std::env::var("SOLV_LATENCY_CEILING_MS").ok().as_deref() {
+        None | Some("") => {}
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(ms) if ms > 0 => policy_config.latency_ceiling_ms = ms,
+            _ => {
+                eprintln!("solv: invalid SOLV_LATENCY_CEILING_MS value: {raw}");
+                std::process::exit(1);
+            }
+        },
+    }
+
+    let state = AppState::new(store, tier1, tier2)
+        .with_bureau(bureau)
+        .with_policy_config(policy_config);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await

@@ -280,7 +280,8 @@ mod tests {
         ];
         let entry =
             &build(now, &profiles, &receipts, &[], ReppoQuota::not_attached()).counterparties[0];
-        assert_eq!(entry.tier, "PRIME");
+        // settled(84.0) → FICO 762 → the VERY_GOOD band (740–799).
+        assert_eq!(entry.tier, "VERY_GOOD");
         assert_eq!(entry.score_age_days, Some(3));
         let last = entry.last_decision.as_ref().expect("decision recorded");
         assert_eq!(last.decision, "APPROVE");
