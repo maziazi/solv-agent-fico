@@ -1,0 +1,221 @@
+/* Solv web pages — the one stylesheet (docs/DESIGN.md).
+ *
+ * Hand-written, no build step. Served from memory at /static/app.css under a
+ * CSP with no inline styles, so nothing here may depend on a style="" attribute.
+ * Fonts: the design faces are named first but are not shipped yet; every stack
+ * falls back to system fonts, so no request leaves the origin.
+ *
+ * Sections: 1 tokens, 2 base, 3 layout, 4 components, 5 receipt page.
+ * Later pages add their own section at the end of this file.
+ */
+
+/* 1. Tokens: Warm Ledger (light, default) and Obsidian Ledger (dark) */
+:root {
+  --bg: #f8f7f4;
+  --surface: #ffffff;
+  --border: #e2e0d8;
+  --ink: #141413;
+  --muted: #5c5b57;
+  --accent: #d95d39;
+  --approve-ink: #15803d;
+  --approve-bg: #dcfce7;
+  --hold-ink: #b45309;
+  --hold-bg: #fef3c7;
+  --block-ink: #b91c1c;
+  --block-bg: #fee2e2;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-head: "Space Grotesk", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12110f;
+    --surface: #1a1917;
+    --border: #2e2c28;
+    --ink: #f4f2ed;
+    --muted: #a3a09a;
+    --accent: #e8734a;
+    --approve-ink: #86efac;
+    --approve-bg: #052e16;
+    --hold-ink: #fcd34d;
+    --hold-bg: #422006;
+    --block-ink: #fca5a5;
+    --block-bg: #450a0a;
+  }
+}
+
+/* 2. Base */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-head);
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 0.5rem;
+}
+h1 { font-size: 1.9375rem; }
+h2 { font-size: 1.25rem; }
+
+p { margin: 0 0 0.75rem; }
+
+code, pre, .mono { font-family: var(--font-mono); }
+code { font-size: 0.875em; overflow-wrap: anywhere; }
+
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.skip-link:focus { left: 0; z-index: 10; }
+
+.small { font-size: 0.875rem; line-height: 1.4; color: var(--muted); }
+.micro { font-size: 0.75rem; line-height: 1.3; color: var(--muted); }
+.muted { color: var(--muted); }
+.unit { font-size: 1rem; color: var(--muted); }
+
+/* 3. Layout */
+.site-header, .site-footer, main {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.wordmark { font-family: var(--font-head); font-weight: 700; font-size: 1.25rem; }
+.tagline { color: var(--muted); font-size: 0.875rem; }
+
+main { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+
+.site-footer {
+  padding-top: 1rem;
+  padding-bottom: 2rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* 4. Components */
+.card, .ledger, .notice {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 1rem;
+  margin: 0 0 1rem;
+}
+
+.notice { border-left: 4px solid var(--hold-ink); }
+
+.scroll { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; font-size: 0.9375rem; }
+th, td { text-align: left; padding: 0.375rem 0.75rem 0.375rem 0; border-bottom: 1px solid var(--border); }
+thead th { color: var(--muted); font-weight: 500; font-size: 0.875rem; }
+tbody th { font-weight: 500; }
+
+.facts { margin: 0; }
+.facts > div { display: grid; grid-template-columns: 9rem 1fr; gap: 0.25rem 1rem; padding: 0.25rem 0; }
+.facts--tight > div { grid-template-columns: 6rem 1fr; }
+.facts dt { color: var(--muted); font-size: 0.875rem; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.badge, .chip {
+  display: inline-block;
+  padding: 0.0625rem 0.5rem;
+  border: 1px solid var(--border);
+  font-family: var(--font-head);
+  font-weight: 500;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.badge--approve, .chip--approve { color: var(--approve-ink); background: var(--approve-bg); border-color: var(--approve-ink); }
+.badge--hold, .chip--hold { color: var(--hold-ink); background: var(--hold-bg); border-color: var(--hold-ink); }
+.badge--neutral, .chip--neutral { color: var(--ink); background: var(--surface); border-color: var(--muted); }
+.badge--block, .chip--block { color: var(--block-ink); background: var(--block-bg); border-color: var(--block-ink); }
+.chip { font-weight: 400; text-transform: none; font-family: var(--font-mono); font-size: 0.75rem; }
+
+/* 5. Receipt page */
+.stamp {
+  border: 2px solid var(--border);
+  padding: 1rem;
+  margin: 0 0 1rem;
+}
+.stamp h1 { margin: 0; font-size: 1.5rem; overflow-wrap: anywhere; }
+.stamp--approve { color: var(--approve-ink); background: var(--approve-bg); border-color: var(--approve-ink); }
+.stamp--hold { color: var(--hold-ink); background: var(--hold-bg); border-color: var(--hold-ink); }
+.stamp--block { color: var(--block-ink); background: var(--block-bg); border-color: var(--block-ink); }
+.stamp--unknown { color: var(--ink); background: var(--surface); }
+.stamp-note { margin: 0 0 1rem; color: var(--muted); font-size: 0.875rem; }
+
+.display {
+  font-family: var(--font-mono);
+  font-size: 3rem;
+  line-height: 1.1;
+  font-weight: 500;
+  margin: 0.25rem 0 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.gauge { display: block; width: 100%; max-width: 34rem; height: auto; margin: 0.5rem 0; }
+.gauge-track { fill: var(--bg); stroke: var(--muted); stroke-width: 1; }
+.gauge-fill { fill: var(--ink); }
+.gauge-tick { stroke: var(--accent); stroke-width: 1; }
+.gauge-raw { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
+/* The viewBox is 550 units wide; on a 360px screen the gauge is about 294px
+ * wide (scale 0.53), so 24 units is about 12.8px on screen. */
+.gauge-label { fill: var(--muted); font-family: var(--font-mono); font-size: 24px; }
+
+.reasons { list-style: none; margin: 0; padding: 0; }
+.reason { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+.reason:last-child { border-bottom: 0; }
+.reason-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.reason-code { font-weight: 500; font-size: 0.8125rem; }
+
+.evidence { margin-top: 0.5rem; }
+.quote { margin: 0.5rem 0 0; background: var(--bg); border: 1px dashed var(--border); padding: 0.5rem 0.75rem; }
+.quote figcaption { font-size: 0.75rem; color: var(--muted); font-family: var(--font-mono); margin-bottom: 0.25rem; }
+.quote pre, .cmd {
+  margin: 0;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cmd { background: var(--bg); border: 1px solid var(--border); padding: 0.5rem 0.75rem; overflow-x: auto; white-space: pre; }
+
+.hash { font-size: 0.8125rem; overflow-wrap: anywhere; margin-bottom: 0.5rem; }
+
+@media (max-width: 36rem) {
+  .display { font-size: 2.25rem; }
+  .facts > div, .facts--tight > div { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

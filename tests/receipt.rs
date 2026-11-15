@@ -442,6 +442,22 @@ async fn post_as(
     )
 }
 
+async fn get_text(router: &axum::Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, String) {
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
+
 async fn get(router: &axum::Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Value) {
     let response = router
         .clone()
@@ -470,10 +486,13 @@ async fn a_decision_returns_the_hash_and_the_receipt_serves_the_same_evidence() 
     assert_eq!(claimed.len(), 64);
 
     let id = body["receipt_id"].as_str().unwrap();
-    for uri in [
-        format!("/api/v1/receipt/{id}"),
-        body["receipt_url"].as_str().unwrap().to_string(),
-    ] {
+    let (page_status, _, page) = get_text(&router, body["receipt_url"].as_str().unwrap()).await;
+    assert_eq!(page_status, StatusCode::OK, "receipt_url opens the page");
+    assert!(
+        page.contains(claimed),
+        "the page shows the same evidence hash"
+    );
+    for uri in [format!("/api/v1/receipt/{id}")] {
         let (status, headers, receipt) = get(&router, &uri).await;
         assert_eq!(status, StatusCode::OK, "{uri}");
         assert_eq!(headers["x-content-type-options"], "nosniff");
@@ -522,7 +541,7 @@ async fn tier1_failure_is_recorded_honestly_and_still_gets_a_receipt() {
         "G1: no approval on a dead tier 1"
     );
     let id = body["receipt_id"].as_str().unwrap();
-    let (status, _, receipt) = get(&router, &format!("/receipt/{id}")).await;
+    let (status, _, receipt) = get(&router, &format!("/api/v1/receipt/{id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(receipt["evidence"]["tier1"]["answers"], Value::Null);
     assert_eq!(recompute(&receipt["evidence"]), receipt["evidence_sha256"]);
@@ -563,11 +582,12 @@ async fn a_long_description_never_lands_in_the_public_receipt() {
 #[tokio::test]
 async fn unknown_receipt_is_404() {
     let (router, _store, _dir) = router_with(MockClefClient::default(), vec![]);
-    for uri in ["/api/v1/receipt/slv_nope", "/receipt/slv_nope"] {
-        let (status, _, body) = get(&router, uri).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
-        assert_eq!(body["error"], "receipt not found");
-    }
+    let (status, _, body) = get(&router, "/api/v1/receipt/slv_nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "receipt not found");
+    let (status, _, page) = get_text(&router, "/receipt/slv_nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(page.contains("RECEIPT NOT FOUND"));
 }
 
 #[tokio::test]
@@ -632,7 +652,7 @@ async fn awkward_floats_keep_the_hash_exact_across_a_snapshot_reload() {
 }
 
 // ---------------------------------------------------------------------------
-// G4 property: for every decision, GET /receipt/:id is 200 and the hash
+// G4 property: for every decision, GET /api/v1/receipt/:id is 200 and the hash
 // matches one recomputed from the evidence.
 // ---------------------------------------------------------------------------
 
@@ -767,7 +787,11 @@ proptest! {
             prop_assert!(seen_ids().lock().unwrap().insert(id.clone()), "receipt id reused");
             prop_assert!(!body["reasons"].as_array().unwrap().is_empty());
 
-            for uri in [format!("/receipt/{id}"), format!("/api/v1/receipt/{id}")] {
+            let (page_status, _, page) = get_text(&router, &format!("/receipt/{id}")).await;
+            prop_assert_eq!(page_status, StatusCode::OK);
+            prop_assert!(page.contains(body["evidence_sha256"].as_str().unwrap()));
+
+            for uri in [format!("/api/v1/receipt/{id}")] {
                 let (status, _, receipt) = get(&router, &uri).await;
                 prop_assert_eq!(status, StatusCode::OK);
                 prop_assert_eq!(&receipt["decision"], &body["decision"]);
