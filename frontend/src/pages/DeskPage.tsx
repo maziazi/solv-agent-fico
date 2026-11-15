@@ -174,7 +174,7 @@ export function DeskPage(): JSX.Element {
       : usd(metrics.total_blocked_usd);
 
   return (
-    <div className="mx-auto max-w-[76rem] px-4 py-8 sm:px-6">
+    <div className="wrap py-8">
       {/* Hero metric strip — real receipts or an honest dash. */}
       <div className="grid grid-cols-1 divide-y divide-border border border-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <MetricTile
@@ -299,7 +299,7 @@ export function DeskPage(): JSX.Element {
             <button
               type="submit"
               disabled={status.kind === "running"}
-              className="mt-4 w-full border border-accent-fill/60 bg-accent-fill px-4 py-2.5 font-head text-sm font-medium uppercase tracking-wider text-white transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="mt-4 w-full rounded-lg border border-accent-fill/60 bg-accent-fill px-4 py-2.5 font-head text-sm font-medium uppercase tracking-wider text-white transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               {status.kind === "running" ? "Gate deciding…" : "Run pre-spend check"}
             </button>

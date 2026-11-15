@@ -248,7 +248,7 @@ function Rated({
           <span className="font-mono">{usd(entry.last_decision.amount_usd)}</span>
           <a
             href={entry.last_decision.receipt_url}
-            className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
+            className="font-mono text-xs text-accent-ink underline decoration-accent decoration-1 underline-offset-2"
           >
             receipt ↗
           </a>

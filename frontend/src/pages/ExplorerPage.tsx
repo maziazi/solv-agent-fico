@@ -134,7 +134,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
                         <span className="font-mono text-sm">{usd(entry.last_decision.amount_usd)}</span>
                         <a
                           href={entry.last_decision.receipt_url}
-                          className="font-mono text-xs text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
+                          className="font-mono text-xs text-accent-ink underline decoration-accent decoration-1 underline-offset-2"
                         >
                           receipt ↗
                         </a>
@@ -256,7 +256,7 @@ export function ExplorerPage(): JSX.Element {
   }, []);
 
   return (
-    <div className="mx-auto max-w-[76rem] px-4 py-8 sm:px-6">
+    <div className="wrap py-8">
       <header className="mb-6">
         <h1 className="font-head text-3xl font-bold tracking-tight">Explorer</h1>
         <p className="mt-1 max-w-3xl text-sm text-muted">

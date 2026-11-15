@@ -17,7 +17,7 @@ third party can check a counterparty without running the app.
 ## 1. Direction
 
 Keep the **Swiss Neo-Brutalist Audit Ledger** register from `docs/DESIGN.md` §1:
-warm light palette, 1px borders, JetBrains Mono for every number, decision never
+reppo-style light palette (docs/DESIGN.md §2), IBM Plex Mono for every number, decision never
 shown without reasons, `UNRATED` rendered as a word.
 
 Borrow **structure** — not palette — from three references:
@@ -303,5 +303,5 @@ never be the only channel carrying the band — the numeric score is always show
 - Should `/agent/:id` show the full Reppo critique text, or only the distilled
   rule? Full text is more verifiable and more hostile input to render; it is
   already escaped and bounded, so the proposal is to show it, marked untrusted.
-- Is a dark theme in scope for v2? `docs/DESIGN.md` §2.2 defines Obsidian Ledger
-  but the new pages double the surface that must be checked in both themes.
+- Is a dark theme in scope for v2? No. v2 ships the light palette only
+  (`docs/DESIGN.md` §2); a dark theme would double the surface to check.

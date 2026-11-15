@@ -23,7 +23,7 @@ function Page({
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="mx-auto max-w-[76rem] px-4 py-12 sm:px-6">
+    <div className="wrap py-12">
       <h1 className="font-head text-3xl font-bold tracking-tight sm:text-4xl">
         {title}
       </h1>

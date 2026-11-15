@@ -170,7 +170,7 @@ export function Pipeline({
               surfaces lift to the bright accent (5.84:1). */}
           <a
             href={result.receipt_url}
-            className="ml-auto font-mono text-sm text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
+            className="ml-auto font-mono text-sm text-accent-ink underline decoration-accent decoration-1 underline-offset-2"
           >
             public trust receipt ↗
           </a>
