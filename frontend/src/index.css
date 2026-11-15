@@ -1,79 +1,97 @@
 /* Solv desk — the SPA stylesheet (docs/DESIGN.md).
  *
  * Tailwind v4 (compiled at build time, embedded into the binary — never a
- * CDN). The design tokens below are §2 verbatim: Warm Ledger (light) and
- * Obsidian Ledger (dark), swapped by prefers-color-scheme, with the contrast
- * constraints of §2.3 baked in — terracotta never carries body-size text.
+ * CDN). Light theme only, taken from reppo.xyz's published tokens: warm paper
+ * background, dark brown ink, orange accent, 12 px radius.
+ *
+ * Contrast rules (computed, docs/DESIGN.md §2.3): the bright accent
+ * #dc5318 is 3.71:1 on the page background, so it only fills large shapes and
+ * diagram strokes. Small accent text and white-on-accent buttons use
+ * --accent-ink #b8420f (5.14:1 on the page, 5.49:1 with white text).
  */
 
 @import "tailwindcss";
 
 @font-face {
-  font-family: "Inter";
+  font-family: "IBM Plex Sans";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 400;
   font-display: swap;
-  src: url("/static/fonts/inter-var-latin.woff2") format("woff2");
+  src: url("/static/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: "Space Grotesk";
+  font-family: "IBM Plex Sans";
   font-style: normal;
-  font-weight: 300 700;
+  font-weight: 500;
   font-display: swap;
-  src: url("/static/fonts/space-grotesk-var-latin.woff2") format("woff2");
+  src: url("/static/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: "JetBrains Mono";
+  font-family: "IBM Plex Sans";
   font-style: normal;
-  font-weight: 100 800;
+  font-weight: 600;
   font-display: swap;
-  src: url("/static/fonts/jetbrains-mono-var-latin.woff2") format("woff2");
+  src: url("/static/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-sans-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
 }
 
 :root {
-  --bg: #f8f7f4;
+  color-scheme: light;
+  --bg: #f9f7f6;
   --surface: #ffffff;
-  --border: #e2e0d8;
-  --ink: #141413;
-  --muted: #5c5b57;
-  --accent: #d95d39;
-  --accent-fill: #a8431f;
+  --wash: #efedeb;
+  --border: #e3e0dd;
+  --ink: #332d28;
+  --muted: #5a5049;
+  --accent: #dc5318;
+  --accent-ink: #b8420f;
+  --accent-fill: #b8420f;
+  --accent-soft: #f6e3da;
   --approve-ink: #15803d;
   --approve-bg: #dcfce7;
   --hold-ink: #b45309;
   --hold-bg: #fef3c7;
   --block-ink: #b91c1c;
   --block-bg: #fee2e2;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12110f;
-    --surface: #1a1917;
-    --border: #2e2c28;
-    --ink: #f4f2ed;
-    --muted: #a3a09a;
-    --accent: #e8734a;
-    --accent-fill: #a8431f;
-    --approve-ink: #86efac;
-    --approve-bg: #052e16;
-    --hold-ink: #fcd34d;
-    --hold-bg: #422006;
-    --block-ink: #fca5a5;
-    --block-bg: #450a0a;
-  }
+  --radius: 0.75rem;
 }
 
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
+  --color-wash: var(--wash);
   --color-border: var(--border);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
   --color-accent-fill: var(--accent-fill);
+  --color-accent-soft: var(--accent-soft);
   --color-approve-ink: var(--approve-ink);
   --color-approve-bg: var(--approve-bg);
   --color-hold-ink: var(--hold-ink);
@@ -81,13 +99,64 @@
   --color-block-ink: var(--block-ink);
   --color-block-bg: var(--block-bg);
 
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-head: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
-/* §5.1 Motion: pipeline nodes resolve in sequence, 120 ms each, and only to
- * show that work happened. Reduced-motion users get the final state at once. */
+html {
+  background: var(--bg);
+}
+
+/* Page container: reppo.xyz uses 2 rem side padding and a wide column. */
+.wrap {
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .wrap {
+    padding-inline: 2rem;
+  }
+}
+
+/* Every fully bordered box gets the theme radius; dividers (border-b, border-t)
+ * are unaffected because they do not carry the plain `border` class. */
+.border.border-border,
+.border.border-ink,
+.border.border-accent-fill,
+.border.border-approve-ink,
+.border.border-hold-ink,
+.border.border-block-ink {
+  border-radius: var(--radius);
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--bg);
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.015em;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+/* Motion: pipeline nodes resolve in sequence, 120 ms each, and only to show
+ * that work happened. Reduced-motion users get the final state at once. */
 @keyframes node-resolve {
   from {
     opacity: 0.25;

@@ -44,7 +44,7 @@ export function App(): JSX.Element {
 
 function NotFound(): JSX.Element {
   return (
-    <div className="mx-auto max-w-[76rem] px-4 py-16 sm:px-6">
+    <div className="wrap py-16">
       <p className="font-head text-2xl font-bold">NOT FOUND</p>
       <p className="mt-2 max-w-xl text-muted">
         Nothing lives at this address. The desk is at{" "}

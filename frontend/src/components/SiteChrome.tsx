@@ -29,7 +29,7 @@ const NAV: NavItem[] = [
       {
         label: "Pre-spend gate",
         to: "/how-it-works#gate",
-        blurb: "APPROVE, HOLD, or BLOCK with reasons, on the hot path",
+        blurb: "APPROVE, HOLD or BLOCK, with reasons",
       },
       {
         label: "Counterparty registry",
@@ -39,7 +39,7 @@ const NAV: NavItem[] = [
       {
         label: "Learned guardrails",
         to: "/how-it-works#rules",
-        blurb: "Critiques become shadow rules; operators promote them",
+        blurb: "Critiques become shadow rules",
       },
       {
         label: "Attack Lab",
@@ -55,12 +55,12 @@ const NAV: NavItem[] = [
 ];
 
 const linkBase =
-  "text-sm transition-colors hover:text-ink focus-visible:text-ink";
+  "rounded-md px-1 py-1 text-sm font-medium transition-colors hover:text-ink focus-visible:text-ink";
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   return `${linkBase} ${
     isActive
-      ? "text-ink underline decoration-accent decoration-2 underline-offset-[6px]"
+      ? "text-ink underline decoration-accent decoration-2 underline-offset-[10px]"
       : "text-muted"
   }`;
 }
@@ -98,14 +98,20 @@ function ProductMenu(): JSX.Element {
         className={`${linkBase} flex items-center gap-1 text-muted`}
       >
         {item.label}
-        <span aria-hidden className="text-[0.6rem]">
-          ▾
-        </span>
+        <svg aria-hidden width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <path
+            d="M2 3.5 5 6.5 8 3.5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </button>
       {open && (
         <div
           id={menuId}
-          className="absolute left-0 top-full z-20 mt-2 w-80 border border-border bg-surface p-2 shadow-sm"
+          className="absolute left-0 top-full z-20 mt-3 w-80 rounded-xl border border-border bg-surface p-2 shadow-lg shadow-ink/5"
         >
           <ul>
             {item.children?.map((child) => (
@@ -113,11 +119,9 @@ function ProductMenu(): JSX.Element {
                 <Link
                   to={child.to}
                   onClick={() => setOpen(false)}
-                  className="block px-3 py-2 hover:bg-bg focus-visible:bg-bg"
+                  className="block rounded-lg px-3 py-2 hover:bg-wash focus-visible:bg-wash"
                 >
-                  <span className="font-head text-sm font-medium">
-                    {child.label}
-                  </span>
+                  <span className="text-sm font-semibold">{child.label}</span>
                   <span className="mt-0.5 block text-xs text-muted">
                     {child.blurb}
                   </span>
@@ -131,6 +135,9 @@ function ProductMenu(): JSX.Element {
   );
 }
 
+const PRIMARY_BUTTON =
+  "rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-bg transition-opacity hover:opacity-90";
+
 export function SiteHeader(): JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Closing on activation rather than on a location effect: the click is the
@@ -138,18 +145,16 @@ export function SiteHeader(): JSX.Element {
   const closeDrawer = () => setDrawerOpen(false);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-bg/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[76rem] items-center gap-6 px-4 py-3 sm:px-6">
+    <header className="sticky top-0 z-30 border-b border-border bg-bg/90 backdrop-blur">
+      <div className="wrap flex items-center gap-6 py-3.5">
         <Link to="/" className="flex items-center gap-2.5" aria-label="Solv, home">
-          <span className="text-accent-fill">
-            <SolvMark size={22} />
+          <span className="text-accent">
+            <SolvMark size={24} />
           </span>
-          <span className="font-head text-xl font-bold tracking-tight">
-            Solv
-          </span>
+          <span className="text-xl font-bold tracking-tight">Solv</span>
         </Link>
 
-        <nav aria-label="main" className="ml-2 hidden items-center gap-5 lg:flex">
+        <nav aria-label="main" className="ml-4 hidden items-center gap-6 lg:flex">
           <ProductMenu />
           {NAV.slice(1).map((item) => (
             <NavLink key={item.to} to={item.to} className={navLinkClass}>
@@ -159,10 +164,7 @@ export function SiteHeader(): JSX.Element {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
-          <Link
-            to="/desk"
-            className="hidden border border-accent-fill bg-accent-fill px-3 py-1.5 font-head text-sm font-medium tracking-wide text-bg hover:opacity-90 sm:inline-block"
-          >
+          <Link to="/desk" className={`hidden sm:inline-block ${PRIMARY_BUTTON}`}>
             Try the desk
           </Link>
           <button
@@ -170,7 +172,7 @@ export function SiteHeader(): JSX.Element {
             aria-expanded={drawerOpen}
             aria-controls="mobile-nav"
             onClick={() => setDrawerOpen((was) => !was)}
-            className="border border-border px-2.5 py-1.5 font-mono text-xs lg:hidden"
+            className="rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-xs lg:hidden"
           >
             {drawerOpen ? "close" : "menu"}
           </button>
@@ -183,7 +185,7 @@ export function SiteHeader(): JSX.Element {
           aria-label="main, mobile"
           className="border-t border-border bg-surface lg:hidden"
         >
-          <ul className="mx-auto max-w-[76rem] px-4 py-2 sm:px-6">
+          <ul className="wrap py-2">
             {NAV.map((item) => (
               <li
                 key={item.label}
@@ -192,7 +194,7 @@ export function SiteHeader(): JSX.Element {
                 <NavLink
                   to={item.to}
                   onClick={closeDrawer}
-                  className="block py-2.5 text-sm"
+                  className="block py-3 text-sm font-medium"
                 >
                   {item.label}
                 </NavLink>
@@ -217,7 +219,7 @@ export function SiteHeader(): JSX.Element {
               <Link
                 to="/desk"
                 onClick={closeDrawer}
-                className="inline-block border border-accent-fill bg-accent-fill px-3 py-1.5 font-head text-sm font-medium text-bg"
+                className={`inline-block ${PRIMARY_BUTTON}`}
               >
                 Try the desk
               </Link>
@@ -240,30 +242,36 @@ const FOOTER_LINKS: { label: string; to: string }[] = [
 
 export function SiteFooter(): JSX.Element {
   return (
-    <footer className="mt-12 border-t border-border">
-      <div className="mx-auto max-w-[76rem] px-4 py-8 sm:px-6">
-        <nav aria-label="footer" className="flex flex-wrap gap-x-6 gap-y-2">
+    <footer className="mt-20 border-t border-border bg-wash">
+      <div className="wrap py-10">
+        <div className="flex items-center gap-2.5">
+          <span className="text-accent">
+            <SolvMark size={20} />
+          </span>
+          <span className="text-lg font-bold tracking-tight">Solv</span>
+        </div>
+        <nav aria-label="footer" className="mt-5 flex flex-wrap gap-x-6 gap-y-2">
           {FOOTER_LINKS.map((link) => (
             <Link
               key={link.to}
               to={link.to}
-              className="text-sm text-muted hover:text-ink"
+              className="text-sm font-medium text-muted hover:text-ink"
             >
               {link.label}
             </Link>
           ))}
         </nav>
-        <p className="mt-5 max-w-2xl text-sm text-muted">
-          Solv records decisions; it does not move money. A receipt is a record,
-          not an authorisation. Scores are not calibrated against outcomes — the
-          band legend says what that means.
+        <p className="mt-6 max-w-2xl text-sm text-muted">
+          Solv records decisions and does not move money. A receipt is a
+          record, not an authorisation. Scores are not calibrated against
+          outcomes.
         </p>
         <p className="mt-2 font-mono text-xs">
           <a
             href="https://github.com/maziazi/solv-agent-fico"
-            className="underline decoration-1 underline-offset-2"
+            className="text-accent-ink underline decoration-1 underline-offset-2"
           >
-            source &amp; specification ↗
+            source and specification ↗
           </a>
         </p>
       </div>
