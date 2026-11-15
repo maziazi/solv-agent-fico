@@ -4,8 +4,10 @@
 //! `docs/PLAN.md`; build order and PR rules are `docs/WORKFLOW.md`.
 
 pub mod api;
+pub mod bureau;
 pub mod policy;
 pub mod reason;
+pub mod reppo;
 pub mod score;
 pub mod state;
 pub mod tier1;
