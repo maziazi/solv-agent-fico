@@ -3,7 +3,7 @@
 //! offline request through the router with mock detectors. They do *not*
 //! measure provider latency: the mocks answer instantly, so every number
 //! here is a floor, not the end-to-end claim. The load-run numbers recorded
-//! in SPEC §9.1 cite this file's binary and command.
+//! in SPEC §9.1 cite `examples/load_run.rs` — same mocks, wider window.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -66,7 +66,7 @@ fn criterion_benchmarks(c: &mut Criterion) {
     c.bench_function("state_read", |b| {
         b.iter(|| {
             let found = store.profile(black_box("bench-counterparty"));
-            black_box(found.is_some());
+            black_box(found);
         })
     });
 
