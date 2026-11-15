@@ -226,9 +226,11 @@ async fn server_flushes_final_snapshot_on_graceful_shutdown() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let tier1: std::sync::Arc<dyn solv::tier1::ClefClient> =
+        std::sync::Arc::new(solv::tier1::MockClefClient::default());
     let server = tokio::spawn(solv::run_server(
         listener,
-        solv::AppState::new(std::sync::Arc::clone(&store)),
+        solv::AppState::new(std::sync::Arc::clone(&store), tier1),
         async move {
             let _ = shutdown_rx.await;
         },

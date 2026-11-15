@@ -3,6 +3,7 @@
 //! The product specification is `docs/SPEC.md`; the work plan is
 //! `docs/PLAN.md`; build order and PR rules are `docs/WORKFLOW.md`.
 
+pub mod api;
 pub mod policy;
 pub mod reason;
 pub mod score;
@@ -12,10 +13,11 @@ pub mod tier1;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 use state::Store;
+use tier1::ClefClient;
 
 /// Listen port used when `PORT` is unset or empty (README "Development").
 pub const DEFAULT_PORT: u16 = 8080;
@@ -23,17 +25,25 @@ pub const DEFAULT_PORT: u16 = 8080;
 /// State file used when `STATE_FILE` is unset or empty.
 pub const DEFAULT_STATE_FILE: &str = "solv_state.json";
 
-/// Shared application state handed to every handler.
+/// Shared application state handed to every handler: the state store and
+/// the Tier 1 client behind its trait.
 #[derive(Clone)]
-pub struct AppState(Arc<Store>);
+pub struct AppState {
+    store: Arc<Store>,
+    tier1: Arc<dyn ClefClient>,
+}
 
 impl AppState {
-    pub fn new(store: Arc<Store>) -> Self {
-        Self(store)
+    pub fn new(store: Arc<Store>, tier1: Arc<dyn ClefClient>) -> Self {
+        Self { store, tier1 }
     }
 
     pub fn store(&self) -> &Arc<Store> {
-        &self.0
+        &self.store
+    }
+
+    pub fn tier1(&self) -> &Arc<dyn ClefClient> {
+        &self.tier1
     }
 }
 
@@ -45,6 +55,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/v1/directory", get(directory))
+        .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
         .with_state(state)
 }
 
@@ -136,7 +147,9 @@ mod tests {
     fn test_state() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("state.json")).unwrap();
-        (dir, AppState::new(store))
+        let tier1: std::sync::Arc<dyn ClefClient> =
+            std::sync::Arc::new(tier1::MockClefClient::default());
+        (dir, AppState::new(store, tier1))
     }
 
     #[tokio::test]
