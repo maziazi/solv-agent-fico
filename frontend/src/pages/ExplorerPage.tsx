@@ -223,7 +223,8 @@ function QuotaMeter({ response }: { response: DirectoryResponse }): JSX.Element 
         <p className="mt-2 border border-dashed border-border bg-bg p-4 text-sm text-muted">
           Audit worker not attached to this instance — no credits are in use
           and there is no quota to meter. The free quota is {reppo.quota_total}{" "}
-          credits; one settled evaluation charges 100.
+          credits; one completed evaluation charges 440 (about $0.22). A new
+          Reppo account starts with a one-time 22,000.
         </p>
       )}
     </section>
@@ -258,6 +259,15 @@ export function ExplorerPage(): JSX.Element {
             desk
           </Link>{" "}
           produces them, and each one is addressable and verifiable.
+        </p>
+        <p className="mt-2 max-w-3xl border-l-2 border-hold-ink bg-hold-bg/40 py-2 pl-4 text-sm">
+          <span className="font-mono text-xs uppercase tracking-wider text-hold-ink">
+            limitation
+          </span>{" "}
+          — a score attaches to a claimed name and URL, not to a verified
+          identity such as a domain or a wallet, so a name can be impersonated.
+          Binding is planned. Compare the URL here with the one you are about
+          to pay.
         </p>
       </header>
 
