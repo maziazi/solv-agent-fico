@@ -7,6 +7,7 @@ pub mod policy;
 pub mod reason;
 pub mod score;
 pub mod state;
+pub mod tier1;
 
 use std::sync::Arc;
 
