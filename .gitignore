@@ -229,6 +229,7 @@ $RECYCLE.BIN/
 
 .claude/settings.local.json
 .claude/scratch/
+.superpowers/
 CLAUDE.local.md
 AGENTS.local.md
 .aider*

@@ -20,7 +20,7 @@ export function BandLegend({
   return (
     <section
       aria-labelledby="band-legend-title"
-      className="bg-surface p-5"
+      className="border border-border bg-surface p-5"
     >
       <h2 id="band-legend-title" className="font-head text-xl font-bold">
         Bands and what they allow
@@ -33,7 +33,7 @@ export function BandLegend({
       <div className="mt-4 overflow-x-auto">
         <table className="w-full border-collapse text-left text-sm">
           <thead>
-            <tr className="text-xs uppercase tracking-wider text-muted">
+            <tr className="border-b border-border text-xs uppercase tracking-wider text-muted">
               <th scope="col" className="py-2 pr-4 font-medium">
                 Band
               </th>
@@ -55,7 +55,7 @@ export function BandLegend({
           </thead>
           <tbody>
             {BANDS.map((band) => (
-              <tr key={band.id} className="">
+              <tr key={band.id} className="border-b border-border last:border-0">
                 <td className="py-2.5 pr-4 align-top">
                   <TierBadge tier={band.id} />
                 </td>
@@ -75,7 +75,7 @@ export function BandLegend({
         </table>
       </div>
 
-      <p className="mt-4 pt-3 text-xs text-muted">
+      <p className="mt-4 border-t border-border pt-3 text-xs text-muted">
         <span className="font-mono uppercase tracking-wider">unproven</span> —
         the boundaries are the published FICO boundaries so you can check them
         against a public reference, not because Solv has measured default rates.
