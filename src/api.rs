@@ -23,6 +23,7 @@ use crate::reason::Reason;
 use crate::score::{self, Pillars};
 use crate::state::Profile;
 use crate::tier1::{ClefState, KnownProfile, standard_request};
+use crate::tier2::ServAsk;
 
 /// Descriptions over 50 KB are rejected outright (SPEC §8.2); between
 /// 1,500 characters and this limit they escalate instead.
@@ -180,14 +181,39 @@ pub async fn pre_spend_check(
     // point worked from clones of the same fields.
     drop(request);
 
-    // Escalation is deterministic (SPEC §5.1). Tier 2 itself arrives with
-    // PR-07; until then an escalated request records Tier 2 as unavailable
-    // and the gate fails closed where the verdict requires it.
+    // Escalation is deterministic (SPEC §5.1). Tier 2 runs only when
+    // enough of the latency budget remains: the call is bounded by what is
+    // left under the ceiling, and on timeout the gate sees elapsed past
+    // the ceiling and holds with SOLV-SYSTEM-002 (G2).
     let escalated = needs_escalation(&gate_request, &tier1_signals, tier, &config);
+    let mut tier2_latency: Option<u64> = None;
     let tier2_signals = if escalated {
-        Some(Tier2Signals {
-            outcome: Tier2Outcome::Unavailable,
-        })
+        let elapsed_before = started.elapsed().as_millis() as u64;
+        let remaining = config.latency_ceiling_ms.saturating_sub(elapsed_before);
+        let tier2_started = std::time::Instant::now();
+        let outcome = if remaining == 0 {
+            // No budget left: never start a call that cannot finish.
+            Tier2Outcome::Unavailable
+        } else {
+            let ask = ServAsk {
+                counterparty_name: gate_request.counterparty_name.clone(),
+                target_url: gate_request.target_url.clone(),
+                amount_usd: gate_request.amount_usd,
+                service_description: gate_request.service_description.clone(),
+                tier_label: tier.as_str().to_string(),
+            };
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(remaining),
+                state.tier2().reason(&ask),
+            )
+            .await
+            {
+                Ok(Ok(verdict)) => verdict.to_outcome(),
+                Ok(Err(_)) | Err(_) => Tier2Outcome::Unavailable,
+            }
+        };
+        tier2_latency = Some(tier2_started.elapsed().as_millis() as u64);
+        Some(Tier2Signals { outcome })
     } else {
         None
     };
@@ -205,10 +231,12 @@ pub async fn pre_spend_check(
     let total_ms = started.elapsed().as_millis() as u64;
 
     let receipt_id = new_receipt_id();
-    // `tier_used` names the tiers that actually ran. Until PR-07 wires the
-    // real Tier 2 client, only Tier 1 ever runs — an escalated request is
-    // held by the gate (SOLV-SYSTEM-003), never silently approved.
-    let tier_used = vec!["clef-flash"];
+    // `tier_used` names the tiers that actually ran: Tier 2 counts when a
+    // call was attempted, whatever its outcome.
+    let mut tier_used = vec!["clef-flash"];
+    if escalated {
+        tier_used.push("serv-reasoning");
+    }
 
     let body = PreSpendCheckResponse {
         receipt_url: format!("/receipt/{receipt_id}"),
@@ -230,7 +258,7 @@ pub async fn pre_spend_check(
         latency_ms: LatencyMs {
             state: state_latency,
             tier1: tier1_latency,
-            tier2: None,
+            tier2: tier2_latency,
             total: total_ms,
         },
         reasons: decision.reasons,

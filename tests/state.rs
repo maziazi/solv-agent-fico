@@ -228,9 +228,11 @@ async fn server_flushes_final_snapshot_on_graceful_shutdown() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let tier1: std::sync::Arc<dyn solv::tier1::ClefClient> =
         std::sync::Arc::new(solv::tier1::MockClefClient::default());
+    let tier2: std::sync::Arc<dyn solv::tier2::ServClient> =
+        std::sync::Arc::new(solv::tier2::MockServClient::default());
     let server = tokio::spawn(solv::run_server(
         listener,
-        solv::AppState::new(std::sync::Arc::clone(&store), tier1),
+        solv::AppState::new(std::sync::Arc::clone(&store), tier1, tier2),
         async move {
             let _ = shutdown_rx.await;
         },
