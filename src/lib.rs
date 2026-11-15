@@ -428,8 +428,9 @@ mod tests {
         use crate::bureau::{Bureau, BureauConfig};
         use crate::reppo::{MockOutcome, MockReppoClient};
         let (dir, state) = test_state();
-        // One scripted settled evaluation: enough for the enqueue leg, and
-        // it proves the worker accepted a job without any network.
+        // One scripted settled evaluation. The enqueue leg never touches
+        // the client — the worker is aborted before it can accept a job —
+        // so the outcome is spare rather than consumed by these tests.
         let client: Arc<dyn reppo::ReppoClient> = Arc::new(MockReppoClient::new(
             vec![MockOutcome::Settled {
                 reppo_score: 84.0,

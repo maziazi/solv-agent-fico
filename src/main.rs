@@ -88,7 +88,9 @@ async fn main() {
             std::sync::Arc::clone(&store),
             config,
         );
-        // The worker detaches: it exits on its own when the store drops.
+        // The worker detaches: `run_worker` loops forever holding its own
+        // store handle, so the task ends only when the runtime drops at
+        // process exit — exactly the lifetime a queue worker wants.
         drop(worker);
         println!("solv: reppo audit worker attached ({credits} starting credits)");
         std::sync::Arc::new(bureau)

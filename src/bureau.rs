@@ -22,6 +22,20 @@
 //!   at submission so an operator can recover it by hand. The Reppo account
 //!   then still holds a `PENDING` evaluation, which the worker rides out as
 //!   `409`s until it settles.
+//!
+//! Accepted limits, stated where the SPEC promises live:
+//! - SPEC §5.3's target-liveness probe (HTTP HEAD/GET before enqueueing,
+//!   the trigger for `SOLV-LIVENESS-001`) is not implemented — enqueue
+//!   validates and queues, never fetches. Fetching untrusted target
+//!   content is a G3 surface, so the deferral is deliberate; the reason
+//!   code currently cannot fire. SPEC §8.3's encoding lab covers the
+//!   description path, not this one.
+//! - SPEC §8.2's "audit-counterparty is rate-limited per API key" is not
+//!   implemented — the service has no auth layer yet. The actual safeguard
+//!   is the credit budget: credits are non-renewable, the default budget
+//!   is 0 (every enqueue returns 402 until an operator sets
+//!   `SOLV_REPPO_STARTING_CREDITS`), and the reservation math caps the
+//!   damage at the budget. Set a budget only on a network you control.
 //! - `credits_remaining` is a local counter seeded from configuration and
 //!   decremented by the `creditsCharged` Reppo reports. It is advisory:
 //!   Reppo's own `402` is authoritative, and zeroes the counter.

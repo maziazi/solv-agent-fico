@@ -451,6 +451,9 @@ pub struct AuditCounterpartyRequest {
 ///
 /// The worker must be attached (`SOLV_REPPO_ENABLED=1` + `REPPO_API_KEY`):
 /// a 503 here says so plainly instead of pretending to queue anything.
+/// Availability is checked before request validation on purpose — an
+/// operator reading a 422 about field lengths from a service that cannot
+/// queue anything would be misdiagnosing the failure.
 pub async fn audit_counterparty(
     State(state): State<AppState>,
     Json(request): Json<AuditCounterpartyRequest>,
