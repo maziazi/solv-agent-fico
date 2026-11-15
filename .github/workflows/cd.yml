@@ -1,12 +1,12 @@
 # Solv CD: deploys run from a tag, never from a merge, and the production
-# environment forces a human approval first. Provider credentials travel
-# only from Actions Secrets into the running service's environment (Render
-# reads them from its own dashboard config) and never touch the repository.
+# environment forces a human approval first. The image is built once and
+# pushed to ghcr.io; the host is chosen by the repository variable
+# DEPLOY_TARGET (`render` or `railway`). Provider credentials live in the
+# host's own dashboard and never touch the repository.
 #
-# Host: Render free web service, Docker runtime, built from the committed
-# Dockerfile (docs/WORKFLOW.md §4.3, changed 2026-11-15: fly.io was
-# replaced at the owner's direction — the account was flagged high-risk at
-# creation and could not host an app).
+# The ghcr image is not consumed by either target today: Render and Railway
+# both build the committed Dockerfile themselves. Pushing it keeps a
+# host-neutral artefact for an image-based host later (docs/WORKFLOW.md 4.3).
 name: cd
 
 on:
@@ -18,22 +18,84 @@ concurrency:
   group: cd-production
   cancel-in-progress: false
 
+env:
+  IMAGE: ghcr.io/maziazi/solv-agent-fico
+
 jobs:
-  deploy:
-    name: deploy to production
+  image:
+    name: build and push the image
     runs-on: ubuntu-latest
     environment: production        # requires a reviewer to approve
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build
+        run: docker build -t "$IMAGE:${{ github.sha }}" .
+      - name: Push the commit tag and, on a tag push, the release tag
+        run: |
+          docker push "$IMAGE:${{ github.sha }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:${{ github.ref_name }}"
+            docker push "$IMAGE:${{ github.ref_name }}"
+          fi
+
+  deploy:
+    name: deploy to ${{ vars.DEPLOY_TARGET }}
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse an unknown or missing DEPLOY_TARGET
+        run: |
+          case "${{ vars.DEPLOY_TARGET }}" in
+            render|railway) ;;
+            *) echo "::error::DEPLOY_TARGET must be 'render' or 'railway', got '${{ vars.DEPLOY_TARGET }}'"; exit 1 ;;
+          esac
+
       - name: Trigger the Render deploy hook
+        if: vars.DEPLOY_TARGET == 'render'
         run: |
           curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}" \
             -H "Content-Type: application/json" \
             -d '{"clearCache": "do_not_clear"}'
+
+      - name: Deploy to Railway
+        if: vars.DEPLOY_TARGET == 'railway'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          npm install --global @railway/cli
+          railway up --ci --service "${{ vars.RAILWAY_SERVICE }}"
+
+      - name: Wait for Railway to report the deployment
+        if: vars.DEPLOY_TARGET == 'railway'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          for i in $(seq 1 60); do
+            status=$(railway deployment list --service "${{ vars.RAILWAY_SERVICE }}" --json --limit 1 | jq -r '.[0].status')
+            echo "railway deployment status: $status"
+            case "$status" in
+              SUCCESS) exit 0 ;;
+              FAILED|CRASHED|REMOVED) exit 1 ;;
+            esac
+            sleep 10
+          done
+          exit 1
+
       - name: Verify the deployment answers
         run: |
+          case "${{ vars.DEPLOY_TARGET }}" in
+            render) host="${{ vars.RENDER_SERVICE_HOST }}" ;;
+            railway) host="${{ vars.RAILWAY_SERVICE_HOST }}" ;;
+          esac
           for i in $(seq 1 30); do
-            if curl -fsS "https://${{ vars.RENDER_SERVICE_HOST }}/healthz"; then exit 0; fi
+            if curl -fsS "https://$host/healthz"; then exit 0; fi
             sleep 10
           done
           exit 1

@@ -331,9 +331,12 @@ rather than in your editor; a different surface catches different mistakes.
 
 ### 4.3 `.github/workflows/cd.yml`
 
-Host: a Render free web service built from the committed `Dockerfile`. This
-replaced fly.io on 2026-11-15: the fly account was flagged high-risk at
-creation and could not host an app, and Render's free tier needs no card.
+Hosts: Render (free web service) or Railway (Free plan), chosen by the
+repository variable `DEPLOY_TARGET` (`render` or `railway`). Both build the
+committed `Dockerfile` themselves; the workflow also builds the image once and
+pushes it to `ghcr.io/maziazi/solv-agent-fico` as a host-neutral artefact.
+Railway setup and its unverified points: `docs/DEPLOY-RAILWAY.md`. fly.io was
+dropped on 2026-11-15 (the account was flagged high-risk at creation).
 
 ```yaml
 name: cd
@@ -347,22 +350,84 @@ concurrency:
   group: cd-production
   cancel-in-progress: false
 
+env:
+  IMAGE: ghcr.io/maziazi/solv-agent-fico
+
 jobs:
-  deploy:
-    name: deploy to production
+  image:
+    name: build and push the image
     runs-on: ubuntu-latest
     environment: production        # requires a reviewer to approve
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build
+        run: docker build -t "$IMAGE:${{ github.sha }}" .
+      - name: Push the commit tag and, on a tag push, the release tag
+        run: |
+          docker push "$IMAGE:${{ github.sha }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            docker tag "$IMAGE:${{ github.sha }}" "$IMAGE:${{ github.ref_name }}"
+            docker push "$IMAGE:${{ github.ref_name }}"
+          fi
+
+  deploy:
+    name: deploy to ${{ vars.DEPLOY_TARGET }}
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse an unknown or missing DEPLOY_TARGET
+        run: |
+          case "${{ vars.DEPLOY_TARGET }}" in
+            render|railway) ;;
+            *) echo "::error::DEPLOY_TARGET must be 'render' or 'railway', got '${{ vars.DEPLOY_TARGET }}'"; exit 1 ;;
+          esac
+
       - name: Trigger the Render deploy hook
+        if: vars.DEPLOY_TARGET == 'render'
         run: |
           curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}" \
             -H "Content-Type: application/json" \
             -d '{"clearCache": "do_not_clear"}'
+
+      - name: Deploy to Railway
+        if: vars.DEPLOY_TARGET == 'railway'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          npm install --global @railway/cli
+          railway up --ci --service "${{ vars.RAILWAY_SERVICE }}"
+
+      - name: Wait for Railway to report the deployment
+        if: vars.DEPLOY_TARGET == 'railway'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          for i in $(seq 1 60); do
+            status=$(railway deployment list --service "${{ vars.RAILWAY_SERVICE }}" --json --limit 1 | jq -r '.[0].status')
+            echo "railway deployment status: $status"
+            case "$status" in
+              SUCCESS) exit 0 ;;
+              FAILED|CRASHED|REMOVED) exit 1 ;;
+            esac
+            sleep 10
+          done
+          exit 1
+
       - name: Verify the deployment answers
         run: |
+          case "${{ vars.DEPLOY_TARGET }}" in
+            render) host="${{ vars.RENDER_SERVICE_HOST }}" ;;
+            railway) host="${{ vars.RAILWAY_SERVICE_HOST }}" ;;
+          esac
           for i in $(seq 1 30); do
-            if curl -fsS "https://${{ vars.RENDER_SERVICE_HOST }}/healthz"; then exit 0; fi
+            if curl -fsS "https://$host/healthz"; then exit 0; fi
             sleep 10
           done
           exit 1
@@ -372,14 +437,17 @@ Two safety properties worth keeping:
 
 - **`environment: production` forces a human approval** before anything reaches
   production. Deploys trigger on a tag, not on every merge to `main`, so merging
-  is never an accidental release.
+  is never an accidental release. Turn off the host's own auto-deploy from
+  GitHub, or a merge would deploy anyway.
 - **Provider credentials never touch the repository.** They are set once in the
-  Render service's environment settings; the only secret in Actions is
-  `RENDER_DEPLOY_HOOK`, and the hook URL grants a deploy, not read access.
+  host's environment settings. The only deploy secrets in Actions are
+  `RENDER_DEPLOY_HOOK` or `RAILWAY_TOKEN` (a project token, scoped to one
+  environment).
 
-Required GitHub Actions Secret: `RENDER_DEPLOY_HOOK`. Required Actions
-Variable: `RENDER_SERVICE_HOST`. The Cloudflare, SERV and Reppo credentials live
-in the Render service's environment, not in Actions.
+Required Actions Variables: `DEPLOY_TARGET`, plus `RENDER_SERVICE_HOST` for
+Render or `RAILWAY_SERVICE` and `RAILWAY_SERVICE_HOST` for Railway. The
+Cloudflare, SERV and Reppo credentials live in the host, not in Actions; a
+public host must not carry `REPPO_API_KEY` or `SOLV_REPPO_ENABLED`.
 
 ### 4.4 Optional: scheduled claim audit
 
