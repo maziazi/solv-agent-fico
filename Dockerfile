@@ -21,6 +21,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/release/solv /usr/local/bin/solv
+# Opt-in demo seed (SOLV_SEED_FILE); read-only, never written by the app.
+COPY --from=build /app/seed /usr/local/share/solv/seed
 # The state file's default name resolves inside the workdir, so snapshot
 # writes land somewhere the unprivileged runtime user can write. A durable
 # volume is the eventual answer; until then restarts lose nothing but the

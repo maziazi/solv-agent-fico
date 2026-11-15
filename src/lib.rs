@@ -120,6 +120,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
         .route("/api/v1/audit-counterparty", post(api::audit_counterparty))
+        .route("/api/v1/agent/{id}", get(api::agent_lookup))
         .route("/api/v1/receipt/{id}", get(receipt::get_receipt));
     let mut app = api.merge(web::routes());
     for path in SPA_ROUTES {

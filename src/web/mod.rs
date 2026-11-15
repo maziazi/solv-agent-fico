@@ -47,6 +47,14 @@ use crate::AppState;
 pub const CSP_NO_SCRIPT: &str = "default-src 'none'; style-src 'self'; img-src 'self' data:; \
 font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
+/// The receipt page's policy when it carries the hash verifier: exactly
+/// [`CSP_NO_SCRIPT`] plus `script-src 'self'`, so the one same-origin asset
+/// `/static/receipt-verify.js` can run. No `connect-src` (the script makes no
+/// request), no inline script, no `unsafe-*`, no other origin. A receipt with
+/// nothing to verify still gets [`CSP_NO_SCRIPT`].
+pub const CSP_RECEIPT_VERIFY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+img-src 'self' data:; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
 /// Routes of the web pages. Merged into the application router.
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -74,4 +82,20 @@ pub fn html_response(
         body,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_verifier_policy_differs_from_the_script_free_one_only_by_script_src() {
+        assert_eq!(
+            CSP_RECEIPT_VERIFY.replacen("script-src 'self'; ", "", 1),
+            CSP_NO_SCRIPT
+        );
+        for banned in ["unsafe-inline", "unsafe-eval", "connect-src", "http"] {
+            assert!(!CSP_RECEIPT_VERIFY.contains(banned), "{banned}");
+        }
+    }
 }

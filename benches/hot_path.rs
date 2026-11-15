@@ -153,11 +153,42 @@ fn bench_full_request(c: &mut Criterion) {
     });
 }
 
+/// `GET /api/v1/agent/{id}` through the in-process router: a profile read and
+/// serialisation, with no tier call at all. A floor like the bench above.
+fn bench_agent_lookup(c: &mut Criterion) {
+    let state = bench_state();
+    let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
+    c.bench_function("agent_lookup_offline", |b| {
+        b.iter_batched(
+            || build_router(state.clone()),
+            |router| {
+                runtime.block_on(async move {
+                    let response = router
+                        .oneshot(
+                            axum::http::Request::builder()
+                                .uri("/api/v1/agent/bench-counterparty")
+                                .body(axum::body::Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .expect("in-process answer");
+                    let bytes = http_body_util::BodyExt::collect(response.into_body())
+                        .await
+                        .expect("body")
+                        .to_bytes();
+                    black_box(bytes.len());
+                })
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
 criterion_group!(
     name = benches;
     config = Criterion::default()
         .warm_up_time(Duration::from_secs(2))
         .measurement_time(Duration::from_secs(5));
-    targets = criterion_benchmarks, bench_full_request
+    targets = criterion_benchmarks, bench_full_request, bench_agent_lookup
 );
 criterion_main!(benches);

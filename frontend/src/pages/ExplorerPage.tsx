@@ -6,12 +6,13 @@
 // so the Attack Lab pass rate is simply not shown.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type { JSX } from "react";
 
 import { fetchDirectory, ApiError } from "../api";
-import { score, usd } from "../format";
+import { detailPath, score, usd } from "../format";
 import { DecisionBadge, TierBadge, EffectChip } from "../components/Badges";
+import { CounterpartyDetail, CounterpartySearch } from "../components/CounterpartyCheck";
 import type { CounterpartyEntry, DirectoryResponse, LearnedRuleEntry } from "../types";
 
 type SortKey = "score" | "age";
@@ -106,7 +107,12 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
               {sorted.map((entry) => (
                 <tr key={entry.counterparty_id} className="border-b border-border last:border-b-0">
                   <th scope="row" className="py-2.5 pr-4 text-left font-medium">
-                    <span className="block">{entry.counterparty_name}</span>
+                    <Link
+                      to={detailPath(entry.counterparty_id)}
+                      className="block underline decoration-1 underline-offset-2"
+                    >
+                      {entry.counterparty_name}
+                    </Link>
                     <span className="block font-mono text-xs text-muted">{entry.target_url}</span>
                   </th>
                   <td className="py-2.5 pr-4">
@@ -223,7 +229,8 @@ function QuotaMeter({ response }: { response: DirectoryResponse }): JSX.Element 
         <p className="mt-2 border border-dashed border-border bg-bg p-4 text-sm text-muted">
           Audit worker not attached to this instance — no credits are in use
           and there is no quota to meter. The free quota is {reppo.quota_total}{" "}
-          credits; one settled evaluation charges 100.
+          credits; one completed evaluation charges 440 (about $0.22). A new
+          Reppo account starts with a one-time 22,000.
         </p>
       )}
     </section>
@@ -233,6 +240,8 @@ function QuotaMeter({ response }: { response: DirectoryResponse }): JSX.Element 
 export function ExplorerPage(): JSX.Element {
   const [data, setData] = useState<DirectoryResponse | null>(null);
   const [failed, setFailed] = useState(false);
+  const [params] = useSearchParams();
+  const selected = params.get("c");
 
   useEffect(() => {
     fetchDirectory()
@@ -259,6 +268,15 @@ export function ExplorerPage(): JSX.Element {
           </Link>{" "}
           produces them, and each one is addressable and verifiable.
         </p>
+        <p className="mt-2 max-w-3xl border-l-2 border-hold-ink bg-hold-bg/40 py-2 pl-4 text-sm">
+          <span className="font-mono text-xs uppercase tracking-wider text-hold-ink">
+            limitation
+          </span>{" "}
+          — a score attaches to a claimed name and URL, not to a verified
+          identity such as a domain or a wallet, so a name can be impersonated.
+          Binding is planned. Compare the URL here with the one you are about
+          to pay.
+        </p>
       </header>
 
       <div className="flex flex-col gap-6" role="status" aria-live="polite">
@@ -271,6 +289,11 @@ export function ExplorerPage(): JSX.Element {
         )}
         {data && (
           <>
+            {selected !== null ? (
+              <CounterpartyDetail key={selected} id={selected} entries={data.counterparties} />
+            ) : (
+              <CounterpartySearch entries={data.counterparties} />
+            )}
             <DirectoryTable entries={data.counterparties} />
             <Guardrails rules={data.learned_rules} />
             <QuotaMeter response={data} />
