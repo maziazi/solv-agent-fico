@@ -151,7 +151,7 @@ const LIFECYCLE = [
     stage: "At the moment of payment",
     wrong:
       "Instructions aimed at your agent are buried in the service description, or the amount is far above what this counterparty has earned.",
-    does: "A reflex check on the hot path, escalation when it is genuinely uncertain, then a deterministic gate. If a detector is down, the request holds.",
+    does: "A small-model check, escalation to a reasoning layer when the first is unsure or the counterparty is unrated, then a deterministic gate. If a detector is down, the request holds.",
   },
   {
     stage: "After the payment",
@@ -228,13 +228,13 @@ const STEPS = [
   },
   {
     n: "02",
-    title: "Tier 1 — reflex",
-    body: "Closed questions to a small fast model. Counterparty text arrives as data, never in a prompt position.",
+    title: "Tier 1 — small model",
+    body: "Closed questions to a small model. Counterparty text arrives as data, never in a prompt position. Measured median in live runs: 394 ms.",
   },
   {
     n: "03",
     title: "Tier 2 — escalation",
-    body: "Bounded reasoning and a prompt guard, consulted only when Tier 1 is genuinely uncertain.",
+    body: "Bounded reasoning and a prompt guard. Consulted when Tier 1 is unsure or the counterparty is unrated; in every live run so far it was consulted, and it adds about 3 seconds.",
   },
   {
     n: "04",
@@ -276,7 +276,7 @@ const SEGMENTS = [
     label: "API & MCP providers",
     body: "You are legitimate and want buying agents to see it. A settled evaluation gives you a band and a page you can hand to a buyer — scored by an independent evaluator, not by Solv and not by you.",
     points: [
-      "Four pillars: liveness, track record, safety, depth",
+      "Four pillars on the receipt; today only track record is filled from the evaluator, the other three sit at a neutral 5",
       "A shareable counterparty page",
       "Scores expire, so staying rated means staying evidenced",
     ],
@@ -306,8 +306,16 @@ const FAQ = [
     a: "No. It answers before you pay and records what it answered. A receipt is a record, not an authorisation, and Solv holds no keys.",
   },
   {
+    q: "Can someone claim another counterparty's name?",
+    a: "Today, yes. A score attaches to a claimed name and URL; it is not yet bound to a verified identity such as a domain or a wallet, so a name can be impersonated. Binding scores to verifiable identities is planned. Until then, check that the URL on a receipt is the one you are about to pay.",
+  },
+  {
+    q: "How fast is it, measured?",
+    a: "Solv's own logic takes about 24 µs per request (benchmark, mocked providers). Against live providers on 2026-11-15, Tier 1 had a median of 394 ms (12 requests), and checks that escalated to Tier 2 took about 3.7 s at the median (34 requests); none of those finished at Tier 1 alone. The two Reppo audits ran 156 s and 273 s and charged 440 credits each, about $0.22. These are small samples, not a service level.",
+  },
+  {
     q: "What is not proven yet?",
-    a: "End-to-end latency against live providers, the quality of distilling critiques into rules, live-provider behaviour on encoding-layered injection, and whether anyone wants this. The specification keeps an explicit list rather than burying it.",
+    a: "Latency at any real volume, the quality of distilling critiques into rules, live-provider behaviour on encoding-layered injection, whether Tier 1 can ever settle a check on its own, and whether anyone wants this. The specification keeps an explicit list rather than burying it.",
   },
 ];
 
@@ -443,8 +451,8 @@ export function LandingPage(): JSX.Element {
           >
             How it works
           </Link>
-          . End-to-end latency against live providers is still{" "}
-          <ClaimLabel level="UNPROVEN" />.
+          . Live-provider latency is <ClaimLabel level="MEASURED" /> on small
+          samples only: Tier 1 median 394 ms, escalated checks about 3.7 s.
         </p>
       </Section>
 
