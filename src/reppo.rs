@@ -379,16 +379,26 @@ pub fn sanitize_untrusted(text: &str, max_chars: usize) -> String {
     cut.chars().take(max_chars).collect()
 }
 
-/// Zero-width and bidirectional-formatting characters: not `is_control`,
-/// but they let text say one thing and display another.
-fn is_invisible_format_char(c: char) -> bool {
+/// Characters that are not `is_control` but let text say one thing and
+/// display another: zero-width and bidirectional formatting, the soft
+/// hyphen, the Arabic letter mark, the Mongolian vowel separator, line and
+/// paragraph separators, variation selectors, and the Unicode tag block
+/// (U+E0000..=U+E007F), which can carry a whole ASCII message that no
+/// renderer shows ("ASCII smuggling").
+pub fn is_invisible_format_char(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
             | '\u{2060}'..='\u{2064}'
             | '\u{2066}'..='\u{2069}'
+            | '\u{FE00}'..='\u{FE0F}'
             | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
     )
 }
 

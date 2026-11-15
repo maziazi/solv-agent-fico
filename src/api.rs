@@ -22,10 +22,11 @@ use crate::policy::{
     PreSpendRequest, Tier2Outcome, Tier2Signals, Tier2Verdict, decide, needs_escalation,
 };
 use crate::reason::Reason;
-use crate::receipt::{self, EvidenceInput, RULESET_VERSION, Tier1Evidence, Tier2Evidence};
+use crate::receipt::{self, EvidenceInput, Tier1Evidence, Tier2Evidence};
+use crate::rules::RuleOutcome;
 use crate::score::{self, Pillars};
 use crate::state::{Profile, Receipt};
-use crate::tier1::{ClefState, KnownProfile, MODEL_NAME, standard_request};
+use crate::tier1::{ClefState, KnownProfile, MODEL_NAME, request_with_rules};
 use crate::tier2::{DEFAULT_MODEL, REASONING_EFFORT, ServAsk, ServError};
 
 /// Descriptions over 50 KB are rejected outright (SPEC §8.2); between
@@ -208,12 +209,26 @@ pub async fn pre_spend_check(
             pillars: settled.expect("effective implies settled").pillars,
         }),
     };
+    // The active learned rules ride the same call as extra questions
+    // (SPEC §5.5). They were compiled when the rules last changed, so this
+    // is a lock read and an `Arc` clone.
+    let compiled_rules = state.store().compiled_rules();
     let tier1_started = std::time::Instant::now();
-    let (tier1_signals, tier1_answers) =
-        match state.tier1().ask(&standard_request(clef_state)).await {
-            Ok(response) => (response.to_signals(), Some(response.answers)),
-            Err(_) => (crate::policy::Tier1Signals::unavailable(), None),
-        };
+    let (tier1_signals, tier1_answers, rule_outcome) = match state
+        .tier1()
+        .ask(&request_with_rules(clef_state, &compiled_rules.questions))
+        .await
+    {
+        Ok(response) => {
+            let outcome = compiled_rules.evaluate(&response);
+            (response.to_signals(), Some(response.answers), outcome)
+        }
+        Err(_) => (
+            crate::policy::Tier1Signals::unavailable(),
+            None,
+            RuleOutcome::default(),
+        ),
+    };
     let tier1_latency = tier1_started.elapsed().as_millis() as u64;
     // The request struct is consumed by the gate; everything before this
     // point worked from clones of the same fields.
@@ -273,7 +288,7 @@ pub async fn pre_spend_check(
         None
     };
 
-    let decision = decide(
+    let mut decision = decide(
         &gate_request,
         profile.as_ref(),
         now,
@@ -284,9 +299,10 @@ pub async fn pre_spend_check(
         ),
         &tier1_signals,
         tier2_signals.as_ref(),
-        &[],
+        &rule_outcome.fired,
         &config,
     );
+    crate::rules::attach_rule_detail(&mut decision.reasons, &rule_outcome);
     let total_ms = started.elapsed().as_millis() as u64;
 
     let receipt_id = new_receipt_id();
@@ -329,7 +345,8 @@ pub async fn pre_spend_check(
             latency_ms: tier1_latency,
         },
         tier2: tier2_evidence,
-        rules_applied: &[],
+        rules_applied: &rule_outcome.applied,
+        ruleset_version: compiled_rules.ruleset_version,
         config: &config,
         decision: &decision,
     });
@@ -359,7 +376,7 @@ pub async fn pre_spend_check(
             total: total_ms,
         },
         reasons: decision.reasons,
-        ruleset_version: RULESET_VERSION,
+        ruleset_version: compiled_rules.ruleset_version,
         evidence_sha256: evidence_sha256.clone(),
     };
     let response =

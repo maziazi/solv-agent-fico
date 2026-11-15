@@ -73,11 +73,14 @@ Two consequences the comparables do not have:
    returns typed answers (`noul`/`choice`/`score`) with probabilities in one
    forward pass. No tokens are invented one at a time, so there is no
    answer-length variance to make latency unpredictable.
-2. **Learned rules compile into reflex-layer questions.** Reppo's written
-   critiques do not become dashboard notes; they become `noul` questions
-   answered inside the same forward pass. Because Clef accepts 1–64 questions
-   per request, a new rule costs **zero** extra network round-trips. The
-   feedback loop closes on the hot path.
+2. **Reppo critiques select learned rules that compile into reflex-layer
+   questions.** A critique never becomes question text: it selects one
+   operator-promotable question from a fixed catalogue (**PROVEN** offline;
+   model-based distillation is not built). Once promoted, the question rides
+   the same Clef call, so it adds no extra network round-trip (**PROVEN**,
+   one call per request). The loop closes on the hot path after a manual
+   promotion, not automatically. Its latency cost with 8 rules and its value
+   on real critiques are **UNPROVEN**.
 
 What Solv does **not** claim: not the most accurate, not the richest on-chain
 data, not the largest evaluator pool.

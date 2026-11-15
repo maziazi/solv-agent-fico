@@ -222,6 +222,15 @@ pub fn standard_request(state: ClefState) -> ClefRequest {
     }
 }
 
+/// The standard request plus the questions compiled from active learned
+/// rules (SPEC §5.5). The rule questions ride the same call: no extra
+/// round-trip.
+pub fn request_with_rules(state: ClefState, rule_questions: &[ClefQuestion]) -> ClefRequest {
+    let mut questions = standard_questions();
+    questions.extend(rule_questions.iter().cloned());
+    ClefRequest { state, questions }
+}
+
 /// A parsed Clef-flash response: the `answers` object keyed by question.
 ///
 /// Constructed by the client after unwrapping the Workers-AI envelope;
