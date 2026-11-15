@@ -7,6 +7,7 @@ FROM rust:1-bookworm AS build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY seed ./seed
 COPY static ./static
 COPY templates ./templates
 COPY frontend/dist ./frontend/dist
@@ -19,7 +20,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/release/solv /usr/local/bin/solv
 # Opt-in demo seed (SOLV_SEED_FILE); read-only, never written by the app.
-COPY seed /usr/local/share/solv/seed
+COPY --from=build /app/seed /usr/local/share/solv/seed
 # The state file's default name resolves inside the workdir, so snapshot
 # writes land somewhere the unprivileged runtime user can write. A durable
 # volume is the eventual answer; until then restarts lose nothing but the
