@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 19e74fd6c132939f263bc24a6b49db46ad9765d360598e0ebbeadbfbea14dd59 # shrinks to amount = 0.01, description = "", injection = 0.9206253591575911, rated = false
+cc e7c70b34fe2e76ea86853dd1a5a64593cede21e4ed8b36c129653739b1d290a7 # shrinks to amount = 1e-9, name = "", url = "", description = "\u{43b30}\n\u{95ac0}{\u{b231f}\u{648bb}�{�'�\\!\u{202e},M\u{7f}\u{c3206}:/\0(ïȺ𡨆𰬍𛰍?¥\u{541ed}$\u{c8b81}\u{b4ae5}==𣳬2u\u{450c1}l\u{657a3}.Ⱥ/&'\u{6c15f}Õ", injection = 9.65777905285512e-9, tier1_mode = 2, tier2_mode = 1, rated = true
+cc 81dbfb2874f66386499f49284be48ba1d90419d1a298a19071bf57a196efa08e # shrinks to entries = [("", "", 97280982573650.63)]
+cc d873b8c30802047e6a472d5a5a7ccd45a1484257735b90a5c9264e7f02190b8a # shrinks to floats = [-238802467511503.63]
+cc c987acf77384c544b1ce3fbbb77cb0b282df54d438ce0befc494d6fdfcde84d8 # shrinks to entries = [("", "", 109592247804352.63)]
