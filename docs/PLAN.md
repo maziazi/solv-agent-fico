@@ -106,6 +106,7 @@ four of those ten during development; keep the rest for the demo.
 | --- | --- | --- |
 | 2026-11-15 13:09 | Owner approved **one** evaluation for the M6 milestone; budgeted 100 credits (`SOLV_REPPO_STARTING_CREDITS=100`); audit `aud_000001` queued for counterparty `LedgerWorks Analytics` via `POST /audit-counterparty` | −100 reserved |
 | 2026-11-15 (M6 watcher end; clock time not recorded) | Watcher ran 28 minutes and ended with the evaluation **never settled**. Status polling returned 404 from the Reppo API, matching the earlier diagnosis of a contract/deployment mismatch. Solv charges only on settlement, so nothing was charged locally. Local read of `GET /api/v1/directory`: `credits_remaining: 100`, `counterparties: []`. Reppo's own balance was **not** checked and stays **UNPROVEN** | 0 charged locally; 100 still reserved |
+| 2026-11-15 14:16 | Owner approved **one** evaluation at the v2 price (440 credits, `SOLV_REPPO_STARTING_CREDITS=440`). The PR build submitted `aud_000001` to `POST /agents/evals`; Reppo answered 401 and the job failed with "reppo rejected the API key" before anything was queued. Route check without a key: `/agents/evals` exists (405 on GET), `/agents/evals/{id}` exists (401), `/agents/eval-requests*` is 404, which explains the earlier 404. `https://eval.reppo.xyz/agents.md` documents the v2 contract (440 credits per text evaluation, 22,000 sign-up credits, several evaluations in flight). Unblock: the owner generates a new key at eval.reppo.xyz → API Key | 0 (nothing queued) |
 
 ## Rules
 
