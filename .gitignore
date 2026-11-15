@@ -121,8 +121,11 @@ node_modules/
 .yarn/install-state.gz
 .pnpm-store/
 
-# Build output
+# Build output. The one exception is frontend/dist/: the compiled desk that
+# the Rust build embeds (docs/DESIGN.md §6). It is committed so `cargo build`
+# and CI need no Node toolchain; rebuild it with `pnpm --dir frontend build`.
 dist/
+!frontend/dist/
 build/
 out/
 .output/

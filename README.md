@@ -251,17 +251,25 @@ Dates and the PRs behind each milestone are in [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Development
 
-The service will be a single Rust binary (Axum + Tokio) with the frontend
-embedded via `include_str!` — one deployable artefact, no Node build step at
-runtime.
+The service is a single Rust binary (Axum + Tokio). The frontend is React +
+TypeScript + Tailwind CSS, built with Vite into `frontend/dist/` and embedded
+into the binary at compile time — one deployable artefact, no Node process at
+runtime (see `docs/DESIGN.md` §6). The built `dist/` files are committed, so
+`cargo build` works without a Node toolchain; rebuild them when the desk
+changes.
 
 ```sh
+pnpm --dir frontend install      # once; Node + pnpm only needed to rebuild the desk
+pnpm --dir frontend build        # writes frontend/dist/, embedded by the next cargo build
 cargo build
-cargo run                                                    # needs .env
-cargo test                                                   # passes offline
+cargo run                        # needs .env, see .env.example
+cargo test                       # passes offline
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+For desk development with live reload: `pnpm --dir frontend dev` (Vite proxies
+`/api` to `127.0.0.1:8080`), with `cargo run` in a second terminal.
 
 `cargo test` must pass with **no network and no credentials**. All three
 providers sit behind traits that are mocked; tests needing a live provider are

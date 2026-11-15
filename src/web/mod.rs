@@ -32,6 +32,7 @@ pub mod assets;
 pub mod escape;
 pub mod layout;
 pub mod receipt_page;
+pub mod spa;
 
 use axum::Router;
 use axum::http::{StatusCode, header};

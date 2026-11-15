@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod bureau;
+pub mod metrics;
 pub mod policy;
 pub mod reason;
 pub mod receipt;
@@ -70,6 +71,7 @@ impl AppState {
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/", get(web::spa::spa_index))
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
         .route("/api/v1/receipt/{id}", get(receipt::get_receipt))
@@ -111,11 +113,14 @@ struct DirectoryEntry {
 #[derive(Serialize)]
 struct DirectoryResponse {
     counterparties: Vec<DirectoryEntry>,
+    /// SPEC §7.4: metrics computed from stored receipts. A metric without
+    /// data is `null`, and the desk renders it as an honest dash.
+    metrics: metrics::Metrics,
 }
 
-/// `GET /api/v1/directory` — every known counterparty, read from live state
-/// (SPEC §7.4). Tiers, learned rules, and metrics join as the features
-/// behind them land (PR-09, PR-13).
+/// `GET /api/v1/directory` — every known counterparty plus bureau metrics,
+/// read from live state (SPEC §7.4). Tiers per counterparty, learned rules,
+/// and the Reppo quota join as PR-13 lands them.
 async fn directory(State(state): State<AppState>) -> Json<DirectoryResponse> {
     let counterparties = state
         .store()
@@ -127,7 +132,11 @@ async fn directory(State(state): State<AppState>) -> Json<DirectoryResponse> {
             target_url: profile.target_url,
         })
         .collect();
-    Json(DirectoryResponse { counterparties })
+    let metrics = metrics::compute(&state.store().list_receipts());
+    Json(DirectoryResponse {
+        counterparties,
+        metrics,
+    })
 }
 
 /// Resolves the listen port from the `PORT` environment variable.
@@ -241,6 +250,127 @@ mod tests {
             .map(|entry| entry["counterparty_id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, vec!["cp-a", "cp-b"], "sorted and complete");
+    }
+
+    #[tokio::test]
+    async fn index_serves_the_spa_shell_under_the_strict_policy() {
+        let response = build_router(test_state().1)
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let csp = response
+            .headers()
+            .get("content-security-policy")
+            .expect("CSP header")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(csp.contains("script-src 'self'"), "csp: {csp}");
+        assert!(csp.contains("connect-src 'self'"), "csp: {csp}");
+        assert!(!csp.contains("unsafe"), "csp: {csp}");
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("src=\"/static/spa.js\""), "shell: {body}");
+        // No third-party fetch: only local asset references. (The favicon is
+        // a data: URI whose XML namespace happens to contain the letters
+        // "http" — that is not a request, so the check is on fetch sites.)
+        for needle in [
+            "src=\"http",
+            "href=\"http",
+            "url(http",
+            "@import",
+            "fetch(\"http",
+        ] {
+            assert!(
+                !body.contains(needle),
+                "external fetch site {needle} in shell"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn directory_metrics_are_computed_from_real_receipts() {
+        let (_dir, state) = test_state();
+        let now = api::now_unix();
+        let response_json = serde_json::json!({
+            "tier": "HIGH_RISK",
+            "tier_used": ["clef-flash", "serv-reasoning"],
+            "latency_ms": { "state": 0, "tier1": 40, "tier2": 600, "total": 660 }
+        });
+        assert!(state.store().insert_receipt(
+            "slv_test_block_1".to_string(),
+            state::Receipt {
+                decision: "BLOCK".to_string(),
+                amount_usd: 50.0,
+                created_at_unix: now,
+                evidence_sha256: "ab".to_string(),
+                evidence: serde_json::json!({}),
+                response: response_json,
+            },
+        ));
+        assert!(state.store().insert_receipt(
+            "slv_test_approve_1".to_string(),
+            state::Receipt {
+                decision: "APPROVE".to_string(),
+                amount_usd: 18.0,
+                created_at_unix: now,
+                evidence_sha256: "cd".to_string(),
+                evidence: serde_json::json!({}),
+                response: serde_json::json!({
+                    "tier": "PRIME",
+                    "tier_used": ["clef-flash"],
+                    "latency_ms": { "state": 0, "tier1": 44, "total": 45 }
+                }),
+            },
+        ));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let metrics = &json["metrics"];
+        assert_eq!(metrics["receipts_total"], 2);
+        assert_eq!(metrics["decisions"]["block"], 1);
+        assert_eq!(metrics["decisions"]["approve"], 1);
+        assert_eq!(metrics["total_blocked_usd"], 50.0);
+        assert_eq!(metrics["latency_ms"]["tier1_only_p50"], 45);
+        assert_eq!(metrics["latency_ms"]["escalated_p50"], 660);
+        assert_eq!(
+            metrics["cost_per_check_usd"],
+            serde_json::Value::Null,
+            "no token counts, no cost number"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_directory_metrics_report_no_data_not_zeros_dressed_up() {
+        let (_dir, state) = test_state();
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let metrics = &json["metrics"];
+        assert_eq!(metrics["receipts_total"], 0);
+        assert_eq!(
+            metrics["latency_ms"]["tier1_only_p50"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
