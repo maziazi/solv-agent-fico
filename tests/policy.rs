@@ -680,3 +680,19 @@ fn score010_evidence_names_its_provenance() {
     assert!(output["settled_at_unix"].as_u64().is_some());
     assert!(output["age_days"].as_u64().is_some());
 }
+
+#[test]
+fn unparsed_tier1_escalates_so_tier2_can_cover() {
+    let unparsed = Tier1Signals {
+        available: true,
+        injection_probability_true: None,
+        risk_class: None,
+        risk_class_confidence: None,
+    };
+    assert!(needs_escalation(
+        &request(50.0),
+        &unparsed,
+        Tier::Prime,
+        &PolicyConfig::default()
+    ));
+}

@@ -547,7 +547,9 @@ pub fn needs_escalation(
     config: &PolicyConfig,
 ) -> bool {
     let cap_usd = tier.max_safe_spend_usd(&config.caps);
-    if !tier1.available {
+    // Escalate on a Tier 1 that produced no verdict — down or unparsed —
+    // so Tier 2 gets the chance to cover (SOLV-SYSTEM-001, taxonomy §6.2).
+    if !tier1.has_verdict() {
         return true;
     }
     if tier1
