@@ -216,6 +216,7 @@ Current status of the headline numbers:
 | Tier 1 p95 ≤ 200 ms end to end | `UNPROVEN` |
 | Attack Lab: zero `APPROVE` on the injection corpus | `PROVEN` — `the_corpus_never_approves_and_every_reason_holds` in `tests/attack.rs` fails if a corpus case is ever approved |
 | Fail-closed under total provider outage | `PROVEN` — `all_detectors_down_hold_fail_closed_and_never_approve` in `tests/attack.rs` |
+| Gate-side hot-path cost over mock detectors | `MEASURED` — 2026-11-15, n=1000 in-process checks: p50 47 µs, p95 58 µs, max 733 µs; state read 52 ns against a 200,000 ns budget (`cargo bench`, `cargo run --release --example load_run -- 1000`) |
 
 One claim was **withdrawn** during research: an earlier draft advertised "40x
 cheaper inference". It cannot be derived from any published price. The
@@ -241,10 +242,13 @@ rules.
 
 Milestones M0–M7 are merged (state, gate, both tiers, receipts, Reppo worker,
 learned rules, the three pages, the deploy pipeline), and M8's Attack Lab has
-merged and passed (PR-14). What remains of M8 is measured evidence: `cargo
-bench` p50/p95 and the load run for the latency and cost rows, and closing or
-explicitly keeping the other three UNPROVEN rows in SPEC §9.1 (compiled-rules
-latency, catalogue coverage, receipt crash survival). The milestone table,
+merged and passed (PR-14). The bench and load-run tooling has also merged
+(`cargo bench`, `cargo run --release --example load_run`), and the gate-side
+floor is recorded as MEASURED in the claims table below. What remains of M8
+is running that tooling against live providers — until then the two
+end-to-end rows stay UNPROVEN, alongside the three other UNPROVEN rows in
+SPEC §9.1 (compiled-rules latency, catalogue coverage, receipt crash
+survival). The milestone table,
 dates, and PRs behind each milestone live in
 [`docs/PLAN.md`](docs/PLAN.md).
 

@@ -23,8 +23,13 @@ thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 
 [dev-dependencies]
+criterion = "0.7"
 http-body-util = "0.1"
 proptest = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
+
+[[bench]]
+name = "hot_path"
+harness = false
