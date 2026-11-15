@@ -101,16 +101,31 @@ impl AppState {
 /// Kept in the library crate so integration tests can exercise routes
 /// in-process without binding a port (AGENTS.md: tests run offline).
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    // Every frontend route serves the SPA shell; the client router resolves
+    // the path (docs/FRONTEND-V2.md §2). `/bureau` is kept as a deep link —
+    // the shell redirects it to `/explorer` client-side, so existing links
+    // survive the rename.
+    const SPA_ROUTES: &[&str] = &[
+        "/",
+        "/desk",
+        "/explorer",
+        "/bureau",
+        "/how-it-works",
+        "/docs",
+        "/pricing",
+        "/attack-lab",
+    ];
+    let api = Router::new()
         .route("/healthz", get(healthz))
-        .route("/", get(web::spa::spa_index))
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
         .route("/api/v1/audit-counterparty", post(api::audit_counterparty))
-        .route("/api/v1/receipt/{id}", get(receipt::get_receipt))
-        .route("/bureau", get(web::spa::spa_index))
-        .merge(web::routes())
-        .with_state(state)
+        .route("/api/v1/receipt/{id}", get(receipt::get_receipt));
+    let mut app = api.merge(web::routes());
+    for path in SPA_ROUTES {
+        app = app.route(path, get(web::spa::spa_index));
+    }
+    app.with_state(state)
 }
 
 async fn healthz() -> &'static str {

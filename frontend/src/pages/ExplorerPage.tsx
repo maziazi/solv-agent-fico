@@ -1,4 +1,5 @@
-// `/bureau` — the Credit Bureau Directory (docs/DESIGN.md §4.3): the
+// `/explorer` — the registry and receipts (docs/DESIGN.md §4.3, Frontend
+// v2 renaming): the
 // directory table with real tiers, the learned guardrails (shadow rules
 // visibly not enforcing), and the Reppo quota meter. This page must not
 // claim an accuracy improvement — there is no labelled ground-truth set yet,
@@ -74,7 +75,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
         <p className="mt-4 border border-dashed border-border bg-bg p-4 text-sm text-muted">
           No counterparty has a settled profile yet — an entry appears once a
           Reppo evaluation settles for it (SPEC §5.3). Every check run on{" "}
-          <Link to="/" className="underline decoration-1 underline-offset-2">
+          <Link to="/desk" className="underline decoration-1 underline-offset-2">
             the desk
           </Link>{" "}
           is already counted in the receipt metrics below.
