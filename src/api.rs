@@ -4,9 +4,9 @@
 //! gate (SPEC §5.4). Hot-path rules enforced here (SPEC §2.1): no disk
 //! I/O, one Tier 1 call, Tier 2 only on escalation, Reppo never.
 //!
-//! Deferred to PR-08 by the PR map: `ruleset_version`, `evidence_sha256`,
-//! and durable receipts — the receipt id returned today is unique but the
-//! stored, hash-carrying receipt is PR-08's capability.
+//! Every decision is sealed into a receipt before it is returned (SPEC §3.3
+//! G4): the insert is an in-memory map write and the snapshot is only
+//! requested, so no disk I/O touches the hot path.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,16 +18,23 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::policy::{PreSpendRequest, Tier2Outcome, Tier2Signals, decide, needs_escalation};
+use crate::policy::{
+    PreSpendRequest, Tier2Outcome, Tier2Signals, Tier2Verdict, decide, needs_escalation,
+};
 use crate::reason::Reason;
+use crate::receipt::{self, EvidenceInput, RULESET_VERSION, Tier1Evidence, Tier2Evidence};
 use crate::score::{self, Pillars};
-use crate::state::Profile;
-use crate::tier1::{ClefState, KnownProfile, standard_request};
-use crate::tier2::{ServAsk, ServError};
+use crate::state::{Profile, Receipt};
+use crate::tier1::{ClefState, KnownProfile, MODEL_NAME, standard_request};
+use crate::tier2::{DEFAULT_MODEL, REASONING_EFFORT, ServAsk, ServError};
 
 /// Descriptions over 50 KB are rejected outright (SPEC §8.2); between
 /// 1,500 characters and this limit they escalate instead.
 const MAX_DESCRIPTION_BYTES: usize = 50 * 1024;
+
+/// `counterparty_name` and `target_url` over 2 KB are rejected outright:
+/// unlike the description they are stored verbatim in the receipt.
+const MAX_IDENTITY_BYTES: usize = 2 * 1024;
 
 /// Monotonic per-process receipt-id counter, paired with the clock so ids
 /// stay unique across restarts.
@@ -41,8 +48,8 @@ pub fn now_unix() -> u64 {
 }
 
 /// Unique receipt id: `slv_` + seconds + nanos + per-process counter.
-/// Sortable by time, collision-free in practice; PR-08 stores what it
-/// names.
+/// Sortable by time, collision-free in practice; the receipt store still
+/// refuses a duplicate rather than trust that.
 pub fn new_receipt_id() -> String {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -121,6 +128,8 @@ struct PreSpendCheckResponse {
     tier_used: Vec<&'static str>,
     latency_ms: LatencyMs,
     reasons: Vec<Reason>,
+    ruleset_version: u32,
+    evidence_sha256: String,
     receipt_url: String,
 }
 
@@ -150,6 +159,22 @@ pub async fn pre_spend_check(
             })),
         )
             .into_response();
+    }
+    // Both land verbatim in the permanent public receipt, so they are bounded
+    // before any tier or the store sees them.
+    for (field, value) in [
+        ("counterparty_name", &request.counterparty_name),
+        ("target_url", &request.target_url),
+    ] {
+        if value.len() > MAX_IDENTITY_BYTES {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({
+                    "error": format!("{field} exceeds 2 KB and is rejected")
+                })),
+            )
+                .into_response();
+        }
     }
 
     let gate_request = PreSpendRequest {
@@ -184,10 +209,11 @@ pub async fn pre_spend_check(
         }),
     };
     let tier1_started = std::time::Instant::now();
-    let tier1_signals = match state.tier1().ask(&standard_request(clef_state)).await {
-        Ok(response) => response.to_signals(),
-        Err(_) => crate::policy::Tier1Signals::unavailable(),
-    };
+    let (tier1_signals, tier1_answers) =
+        match state.tier1().ask(&standard_request(clef_state)).await {
+            Ok(response) => (response.to_signals(), Some(response.answers)),
+            Err(_) => (crate::policy::Tier1Signals::unavailable(), None),
+        };
     let tier1_latency = tier1_started.elapsed().as_millis() as u64;
     // The request struct is consumed by the gate; everything before this
     // point worked from clones of the same fields.
@@ -271,9 +297,47 @@ pub async fn pre_spend_check(
         tier_used.push("serv-reasoning");
     }
 
+    // The evidence names Tier 2 only when a call was sent, so the hash a
+    // third party recomputes agrees with `tier_used`.
+    let tier2_evidence = match (tier2_attempted, tier2_signals.as_ref()) {
+        (true, Some(signals)) => Some(Tier2Evidence {
+            model: DEFAULT_MODEL,
+            reasoning_effort: REASONING_EFFORT,
+            verdict: match signals.outcome {
+                Tier2Outcome::Verdict(Tier2Verdict::Approve) => "approve",
+                Tier2Outcome::Verdict(Tier2Verdict::Revise) => "revise",
+                Tier2Outcome::Verdict(Tier2Verdict::Mismatch) => "mismatch",
+                Tier2Outcome::GuardRefusal => "guard_refusal",
+                Tier2Outcome::Unavailable => "unavailable",
+            },
+            guard_triggered: matches!(signals.outcome, Tier2Outcome::GuardRefusal),
+            latency_ms: tier2_latency.unwrap_or(0),
+        }),
+        _ => None,
+    };
+
+    let evidence = receipt::build_evidence(&EvidenceInput {
+        counterparty_id: &gate_request.counterparty_name,
+        target_url: &gate_request.target_url,
+        amount_usd: gate_request.amount_usd,
+        service_description: &gate_request.service_description,
+        settled,
+        effective,
+        tier1: Tier1Evidence {
+            model: MODEL_NAME,
+            answers: tier1_answers.as_ref(),
+            latency_ms: tier1_latency,
+        },
+        tier2: tier2_evidence,
+        rules_applied: &[],
+        config: &config,
+        decision: &decision,
+    });
+    let evidence_sha256 = receipt::evidence_sha256(&evidence);
+
     let body = PreSpendCheckResponse {
         receipt_url: format!("/receipt/{receipt_id}"),
-        receipt_id,
+        receipt_id: receipt_id.clone(),
         decision: decision.kind.as_str(),
         fico_score: effective.map(|s| s.fico_effective),
         fico_raw: effective.map(|s| s.fico_raw),
@@ -295,9 +359,36 @@ pub async fn pre_spend_check(
             total: total_ms,
         },
         reasons: decision.reasons,
+        ruleset_version: RULESET_VERSION,
+        evidence_sha256: evidence_sha256.clone(),
     };
+    let response =
+        serde_json::to_value(&body).expect("serialising the response struct cannot fail");
 
-    (StatusCode::OK, Json(body)).into_response()
+    // G4: no decision leaves without a stored receipt. An id collision is
+    // astronomically unlikely, but a duplicate must never overwrite an
+    // existing receipt, so it fails the request instead of the audit trail.
+    let sealed = state.store().insert_receipt(
+        receipt_id,
+        Receipt {
+            decision: body.decision.to_string(),
+            amount_usd: gate_request.amount_usd,
+            created_at_unix: now,
+            evidence_sha256,
+            evidence,
+            response: response.clone(),
+        },
+    );
+    if !sealed {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "receipt id collision; retry the request" })),
+        )
+            .into_response();
+    }
+    state.store().request_snapshot();
+
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 #[cfg(test)]

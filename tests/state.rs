@@ -28,6 +28,7 @@ fn snapshot_roundtrip_survives_restart() {
             decision: "BLOCK".to_string(),
             amount_usd: 50.0,
             created_at_unix: 1_762_700_000,
+            ..Receipt::default()
         },
     ));
     store.set_learned_rules(vec![LearnedRule {
@@ -161,6 +162,7 @@ fn duplicate_receipt_id_is_refused_and_original_kept() {
         decision: "BLOCK".to_string(),
         amount_usd: 50.0,
         created_at_unix: 1_762_700_000,
+        ..Receipt::default()
     };
     assert!(store.insert_receipt("slv_001".to_string(), original.clone()));
     assert!(!store.insert_receipt(
@@ -169,6 +171,7 @@ fn duplicate_receipt_id_is_refused_and_original_kept() {
             decision: "APPROVE".to_string(),
             amount_usd: 1.0,
             created_at_unix: 2_762_700_000,
+            ..Receipt::default()
         }
     ));
     assert_eq!(store.receipt("slv_001"), Some(original));

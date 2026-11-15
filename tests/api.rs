@@ -234,6 +234,99 @@ async fn oversized_description_is_rejected_before_any_tier_runs() {
     assert!(body["error"].as_str().unwrap().contains("50 KB"));
 }
 
+/// Counts Tier 1 calls so a test can prove a request never reached a tier.
+struct CountingClef(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl ClefClient for CountingClef {
+    async fn ask(
+        &self,
+        _request: &solv::tier1::ClefRequest,
+    ) -> Result<solv::tier1::ClefResponse, solv::tier1::ClefError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(solv::tier1::ClefError::Unconfigured)
+    }
+}
+
+async fn post_identity(
+    router: &axum::Router,
+    counterparty_name: &str,
+    target_url: &str,
+) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/pre-spend-check")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "counterparty_name": counterparty_name,
+                        "target_url": target_url,
+                        "amount_usd": 50.0,
+                        "service_description": "Real-time market data."
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// Both fields end up verbatim in a permanent public receipt, so they are
+/// bounded at 2 KB (bytes) like the description is at 50 KB — and the
+/// request is refused before any tier or the store is touched.
+#[tokio::test]
+async fn oversized_name_or_url_is_rejected_before_any_tier_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().join("state.json")).unwrap();
+    let clef = Arc::new(CountingClef(std::sync::atomic::AtomicUsize::new(0)));
+    let tier1: Arc<dyn ClefClient> = clef.clone();
+    let tier2: Arc<dyn ServClient> = Arc::new(MockServClient::default());
+    let router = build_router(AppState::new(store, tier1, tier2));
+
+    let url = "https://api.example.com/v1/feed";
+    let limit = 2 * 1024;
+    let cases = [
+        ("counterparty_name", "n".repeat(limit + 1), url.to_string()),
+        (
+            "target_url",
+            "DataFeed Pro".to_string(),
+            "u".repeat(limit + 1),
+        ),
+        // The limit counts bytes, not characters: 683 euro signs are 2,049 bytes.
+        ("counterparty_name", "\u{20ac}".repeat(683), url.to_string()),
+    ];
+    for (field, name, target) in cases {
+        let (status, body) = post_identity(&router, &name, &target).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{field}");
+        let message = body["error"].as_str().unwrap();
+        assert!(
+            message.contains(field) && message.contains("2 KB"),
+            "{message}"
+        );
+    }
+    assert_eq!(
+        clef.0.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no tier may run for a rejected request"
+    );
+
+    // Exactly 2 KB is still accepted.
+    let (status, body) = post_identity(&router, &"n".repeat(limit), &"u".repeat(limit)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["receipt_id"].as_str().is_some());
+    assert_eq!(clef.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn non_numeric_amount_is_rejected_at_the_boundary() {
     // JSON has no NaN: a null amount fails deserialisation (422) before
