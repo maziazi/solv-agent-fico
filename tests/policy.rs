@@ -285,8 +285,8 @@ fn row10_absolute_cap_blocks() {
 
 #[test]
 fn row10_tier_cap_holds() {
-    // 78 → 729 raw, 45-day-old evidence decays 5 → 724: still PRIME
-    // (cap 500). Use a standard-tier profile for the cap check instead.
+    // 67 → 669 raw: STANDARD (cap 100), so 150 exceeds the tier cap while
+    // staying under the absolute cap (500).
     let profile = profile(Some(settled(67.0, 9, 3))); // 300 + 368.5 → 669
     let decision = run(
         &request(150.0),
@@ -450,6 +450,13 @@ fn g1_fail_closed_across_degraded_conditions() {
     ] {
         for tier1 in [
             Tier1Signals::unavailable(),
+            // Available but nothing parsed: not a verdict (G1 hole closed).
+            Tier1Signals {
+                available: true,
+                injection_probability_true: None,
+                risk_class: None,
+                risk_class_confidence: None,
+            },
             Tier1Signals {
                 available: true,
                 injection_probability_true: Some(0.02),
@@ -466,38 +473,56 @@ fn g1_fail_closed_across_degraded_conditions() {
                     outcome: Tier2Outcome::Verdict(Tier2Verdict::Approve),
                 }),
                 Some(Tier2Signals {
+                    outcome: Tier2Outcome::Verdict(Tier2Verdict::Revise),
+                }),
+                Some(Tier2Signals {
+                    outcome: Tier2Outcome::Verdict(Tier2Verdict::Mismatch),
+                }),
+                Some(Tier2Signals {
                     outcome: Tier2Outcome::GuardRefusal,
                 }),
             ] {
-                for amount in [10.0, 600.0] {
-                    let decision = run(
-                        &request(amount),
-                        Some(&profile),
-                        &tier1,
-                        tier2.as_ref(),
-                        &[],
-                        10,
-                    );
-                    assert!(decision.satisfies_g5());
-                    let tiers_live = tier1.available
-                        || matches!(
-                            tier2.map(|t| t.outcome),
-                            Some(Tier2Outcome::GuardRefusal) | Some(Tier2Outcome::Verdict(_))
+                for rules in [
+                    vec![],
+                    vec![FiredRule {
+                        rule_id: "014".to_string(),
+                        effect: RuleEffect::ForcedBlock,
+                    }],
+                    vec![FiredRule {
+                        rule_id: "015".to_string(),
+                        effect: RuleEffect::ForcedHold,
+                    }],
+                ] {
+                    for amount in [10.0, 600.0] {
+                        let decision = run(
+                            &request(amount),
+                            Some(&profile),
+                            &tier1,
+                            tier2.as_ref(),
+                            &rules,
+                            10,
                         );
-                    let score_usable = profile
-                        .score
-                        .as_ref()
-                        .is_some_and(|s| solv::score::effective_score(s, NOW).is_some());
-                    if decision.kind == DecisionKind::Approve {
-                        approve_count += 1;
-                        assert!(score_usable, "approve requires a usable score");
-                        assert!(tiers_live, "approve requires a tier verdict");
-                    } else if !tiers_live {
-                        assert_ne!(
-                            decision.kind,
-                            DecisionKind::Approve,
-                            "G1 violated: system failure became permission to pay"
-                        );
+                        assert!(decision.satisfies_g5());
+                        let tiers_live = tier1.has_verdict()
+                            || matches!(
+                                tier2.map(|t| t.outcome),
+                                Some(Tier2Outcome::GuardRefusal) | Some(Tier2Outcome::Verdict(_))
+                            );
+                        let score_usable = profile
+                            .score
+                            .as_ref()
+                            .is_some_and(|s| solv::score::effective_score(s, NOW).is_some());
+                        if decision.kind == DecisionKind::Approve {
+                            approve_count += 1;
+                            assert!(score_usable, "approve requires a usable score");
+                            assert!(tiers_live, "approve requires a tier verdict");
+                        } else if !tiers_live {
+                            assert_ne!(
+                                decision.kind,
+                                DecisionKind::Approve,
+                                "G1 violated: system failure became permission to pay"
+                            );
+                        }
                     }
                 }
             }
@@ -514,7 +539,7 @@ fn escalation_rules_match_spec_5_1() {
         &request(50.0),
         &Tier1Signals::unavailable(),
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
     // Certain injection: skip Tier 2 entirely.
     let certain = Tier1Signals {
@@ -527,7 +552,7 @@ fn escalation_rules_match_spec_5_1() {
         &request(50.0),
         &certain,
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
     // Uncertain band 0.10–0.90.
     let uncertain = Tier1Signals {
@@ -540,7 +565,7 @@ fn escalation_rules_match_spec_5_1() {
         &request(50.0),
         &uncertain,
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
     // Low risk-class confidence.
     let low_conf = Tier1Signals {
@@ -553,37 +578,105 @@ fn escalation_rules_match_spec_5_1() {
         &request(50.0),
         &low_conf,
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
     // Cold start.
     assert!(needs_escalation(
         &request(50.0),
         &clean_tier1,
         Tier::Unrated,
-        0.0
+        &PolicyConfig::default()
     ));
     // Long description.
     let mut long = request(50.0);
     long.service_description = "x".repeat(1_501);
-    assert!(needs_escalation(&long, &clean_tier1, Tier::Prime, 500.0));
+    assert!(needs_escalation(
+        &long,
+        &clean_tier1,
+        Tier::Prime,
+        &PolicyConfig::default()
+    ));
     // Borderline amount: above the cap, under twice the cap.
     assert!(needs_escalation(
         &request(600.0),
         &clean_tier1,
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
     assert!(!needs_escalation(
         &request(1_100.0),
         &clean_tier1,
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
     // Clean, confident, short, in-cap: no escalation.
     assert!(!needs_escalation(
         &request(50.0),
         &clean_tier1,
         Tier::Prime,
-        500.0
+        &PolicyConfig::default()
     ));
+}
+
+/// G1 hole closed: a Tier 1 that answered nothing it could parse is not a
+/// verdict, even if the HTTP call itself succeeded.
+#[test]
+fn tier1_available_but_unparsed_fails_closed() {
+    let profile = prime_profile();
+    let unparsed = Tier1Signals {
+        available: true,
+        injection_probability_true: None,
+        risk_class: None,
+        risk_class_confidence: None,
+    };
+    let decision = run(&request(50.0), Some(&profile), &unparsed, None, &[], 10);
+    assert_eq!(decision.kind, DecisionKind::Hold);
+    assert_eq!(decision.reasons[0].code, ReasonCode::System003);
+}
+
+#[test]
+fn non_positive_amounts_are_refused() {
+    for amount in [0.0, -50.0, f64::INFINITY] {
+        let decision = clean_case(amount);
+        assert_eq!(decision.kind, DecisionKind::Block, "amount {amount}");
+        assert_eq!(decision.reasons[0].code, ReasonCode::Limit002);
+    }
+    let decision = clean_case(f64::NAN);
+    assert_eq!(decision.kind, DecisionKind::Block);
+    // The invalid amount is named as a string, not silently null.
+    let evidence = decision.reasons[0].evidence.as_ref().unwrap();
+    let output = evidence.detector_output.as_ref().unwrap();
+    assert_eq!(output["amount_usd"].as_str(), Some("NaN"));
+}
+
+#[test]
+fn fired_hold_rule_stays_visible_when_another_row_holds() {
+    // Tier cap (row 10) holds first; the learned rule must still appear.
+    let profile = profile(Some(settled(67.0, 9, 3))); // STANDARD, cap 100
+    let rules = vec![FiredRule {
+        rule_id: "015".to_string(),
+        effect: RuleEffect::ForcedHold,
+    }];
+    let decision = run(
+        &request(150.0),
+        Some(&profile),
+        &tier1_clean(),
+        None,
+        &rules,
+        10,
+    );
+    assert_eq!(decision.kind, DecisionKind::Hold);
+    assert_eq!(decision.reasons[0].code, ReasonCode::Limit001);
+    assert_eq!(decision.reasons[1].code.as_str(), "SOLV-RULE-015");
+    assert!(decision.satisfies_g5());
+}
+
+#[test]
+fn score010_evidence_names_its_provenance() {
+    let decision = clean_case(50.0);
+    let evidence = decision.reasons[0].evidence.as_ref().unwrap();
+    let output = evidence.detector_output.as_ref().unwrap();
+    assert_eq!(output["eval_id"].as_str(), Some("ev_test"));
+    assert!(output["settled_at_unix"].as_u64().is_some());
+    assert!(output["age_days"].as_u64().is_some());
 }

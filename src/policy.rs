@@ -6,6 +6,18 @@
 //! track record can never rescue a hijack attempt.
 
 use crate::reason::{Effect, Evidence, Reason, ReasonCode, Source};
+
+/// Probability of injection at which Tier 1 counts as certain (SPEC §5.1,
+/// §5.4 row 2): Tier 2 is skipped and the decision is BLOCK.
+const INJECTION_CERTAINTY: f64 = 0.90;
+/// Below this injection probability the band is considered clean; between
+/// the two bounds it is uncertain and escalates (SPEC §5.1 rule 1).
+const INJECTION_UNCERTAIN_FLOOR: f64 = 0.10;
+/// Risk-class confidence below which the classification escalates
+/// (SPEC §5.1 rule 2, and row 3's blocking confidence floor).
+const RISK_CONFIDENCE_FLOOR: f64 = 0.90;
+/// Descriptions longer than this escalate to Tier 2 (SPEC §5.1 rule 4).
+const DESCRIPTION_ESCALATION_CHARS: usize = 1_500;
 use crate::score::{self, Caps, SettledScore, Tier};
 use crate::state::Profile;
 use serde::{Deserialize, Serialize};
@@ -66,6 +78,14 @@ impl Tier1Signals {
             risk_class: None,
             risk_class_confidence: None,
         }
+    }
+
+    /// True only when the call succeeded *and* at least one answer was
+    /// parsed. An HTTP 200 with an unreadable body is not a verdict, and
+    /// G1 forbids reaching APPROVE on it — system failure must never
+    /// become permission to pay.
+    pub fn has_verdict(&self) -> bool {
+        self.available && (self.injection_probability_true.is_some() || self.risk_class.is_some())
     }
 }
 
@@ -185,7 +205,32 @@ pub fn decide(
     let tier = score::tier_for(effective.map(|s| s.fico_effective));
     let cap = tier.max_safe_spend_usd(&config.caps);
 
-    let hold = |code: ReasonCode, ev: Evidence| holding(code, Some(ev), effective, tier, cap);
+    // Reasons for learned rules that fired with a forcing-hold effect.
+    // They attach to every HOLD outcome — including rows 7–11 — so an
+    // auditor always sees that a guardrail fired, whichever row held first.
+    let forced_hold_rule_reasons: Vec<Reason> = fired_rules
+        .iter()
+        .filter(|rule| rule.effect == RuleEffect::ForcedHold)
+        .map(|rule| {
+            let mut reason = Reason::from_code(ReasonCode::Rule(rule.rule_id.clone()));
+            reason.effect = Effect::ForcedHold;
+            reason.evidence = Some(evidence(
+                Source::PolicyGate,
+                "learned_rules",
+                serde_json::json!({ "rule_id": rule.rule_id }),
+            ));
+            reason
+        })
+        .collect();
+
+    let hold = |code: ReasonCode, ev: Evidence| {
+        let mut reasons = Vec::with_capacity(1 + forced_hold_rule_reasons.len());
+        let mut primary = Reason::from_code(code);
+        primary.evidence = Some(ev);
+        reasons.push(primary);
+        reasons.extend(forced_hold_rule_reasons.iter().cloned());
+        finish(DecisionKind::Hold, reasons, effective, tier, cap)
+    };
     let block = |code: ReasonCode, ev: Evidence| blocking(code, Some(ev), effective, tier, cap);
 
     // Row 1 — Tier 2 guard refusal is positive evidence of injection.
@@ -203,7 +248,11 @@ pub fn decide(
     }
 
     // Row 2 — Tier 1 is confident an instruction targets the agent.
-    if tier1.available && tier1.injection_probability_true.is_some_and(|p| p >= 0.90) {
+    if tier1.available
+        && tier1
+            .injection_probability_true
+            .is_some_and(|p| p >= INJECTION_CERTAINTY)
+    {
         return block(
             ReasonCode::Injection002,
             evidence(
@@ -220,7 +269,9 @@ pub fn decide(
             tier1.risk_class,
             Some(RiskClass::Exfiltration) | Some(RiskClass::Coercion)
         );
-        let confident = tier1.risk_class_confidence.is_some_and(|c| c >= 0.90);
+        let confident = tier1
+            .risk_class_confidence
+            .is_some_and(|c| c >= RISK_CONFIDENCE_FLOOR);
         if risky && confident {
             return block(
                 ReasonCode::Injection003,
@@ -251,7 +302,9 @@ pub fn decide(
         return finish(DecisionKind::Block, vec![reason], effective, tier, cap);
     }
 
-    // Row 5 — safety pillar at or below the floor.
+    // Row 5 — safety pillar at or below the floor. Fires on the settled
+    // record even when the score has expired: stale evidence of a hijack
+    // attempt still fails closed, and the evidence says it is stale.
     if let Some(score) = settled {
         if score.pillars.safety <= config.safety_floor {
             return block(
@@ -259,7 +312,10 @@ pub fn decide(
                 evidence(
                     Source::Reppo,
                     "pillars.safety",
-                    serde_json::json!({ "safety": score.pillars.safety }),
+                    serde_json::json!({
+                        "safety": score.pillars.safety,
+                        "expired": effective.is_none(),
+                    }),
                 ),
             );
         }
@@ -282,14 +338,15 @@ pub fn decide(
         }
     }
 
-    // Row 7 — every tier failed or timed out: fail closed.
+    // Row 7 — no tier produced a verdict (both down, or Tier 1 answered
+    // nothing it could parse): fail closed.
     let tier2_covering = tier2.is_some_and(|t2| {
         matches!(
             t2.outcome,
             Tier2Outcome::GuardRefusal | Tier2Outcome::Verdict(_)
         )
     });
-    if !tier1.available && !tier2_covering {
+    if !tier1.has_verdict() && !tier2_covering {
         return hold(
             ReasonCode::System003,
             evidence(
@@ -324,15 +381,26 @@ pub fn decide(
         );
     }
 
-    // Row 10 — amount against the operator's absolute cap, then the tier cap.
-    if request.amount_usd.is_nan() || request.amount_usd > config.absolute_cap_usd {
+    // Row 10 — amount against the operator's absolute cap, then the tier
+    // cap. A non-finite or non-positive amount is rejected here too: it
+    // could never be a payment, and minting an APPROVE receipt for it
+    // would pollute the audit record (G4). NaN serialises as null, so the
+    // invalid amount is also named as a string.
+    let invalid_amount = !request.amount_usd.is_finite() || request.amount_usd <= 0.0;
+    if invalid_amount || request.amount_usd > config.absolute_cap_usd {
+        let amount_json = if request.amount_usd.is_finite() {
+            serde_json::json!(request.amount_usd)
+        } else {
+            serde_json::json!(format!("{}", request.amount_usd))
+        };
         return block(
             ReasonCode::Limit002,
             evidence(
                 Source::PolicyGate,
                 "amount_usd",
                 serde_json::json!({
-                    "amount_usd": request.amount_usd,
+                    "amount_usd": amount_json,
+                    "invalid": invalid_amount,
                     "absolute_cap_usd": config.absolute_cap_usd,
                 }),
             ),
@@ -382,19 +450,16 @@ pub fn decide(
         }
     }
 
-    // A learned rule fired with a forcing-hold effect.
-    if let Some(rule) = fired_rules
-        .iter()
-        .find(|rule| rule.effect == RuleEffect::ForcedHold)
-    {
-        let mut reason = Reason::from_code(ReasonCode::Rule(rule.rule_id.clone()));
-        reason.effect = Effect::ForcedHold;
-        reason.evidence = Some(evidence(
-            Source::PolicyGate,
-            "learned_rules",
-            serde_json::json!({ "rule_id": rule.rule_id }),
-        ));
-        return finish(DecisionKind::Hold, vec![reason], effective, tier, cap);
+    // A learned rule fired with a forcing-hold effect and nothing harder
+    // fired first: the rule alone decides.
+    if !forced_hold_rule_reasons.is_empty() {
+        return finish(
+            DecisionKind::Hold,
+            forced_hold_rule_reasons.clone(),
+            effective,
+            tier,
+            cap,
+        );
     }
 
     // Row 12 — nothing fired: approve, with reasons (G5).
@@ -413,22 +478,12 @@ pub fn decide(
             serde_json::json!({
                 "fico_effective": effective.fico_effective,
                 "age_days": effective.age_days,
+                "eval_id": score.eval_id,
+                "settled_at_unix": score.settled_at_unix,
             }),
         ));
     }
     finish(DecisionKind::Approve, vec![reason], effective, tier, cap)
-}
-
-fn holding(
-    code: ReasonCode,
-    ev: Option<Evidence>,
-    effective: Option<score::EffectiveScore>,
-    tier: Tier,
-    cap: f64,
-) -> Decision {
-    let mut reason = Reason::from_code(code);
-    reason.evidence = ev;
-    finish(DecisionKind::Hold, vec![reason], effective, tier, cap)
 }
 
 fn blocking(
@@ -489,29 +544,36 @@ pub fn needs_escalation(
     request: &PreSpendRequest,
     tier1: &Tier1Signals,
     tier: Tier,
-    cap_usd: f64,
+    config: &PolicyConfig,
 ) -> bool {
+    let cap_usd = tier.max_safe_spend_usd(&config.caps);
     if !tier1.available {
         return true;
     }
-    if tier1.injection_probability_true.is_some_and(|p| p >= 0.90) {
+    if tier1
+        .injection_probability_true
+        .is_some_and(|p| p >= INJECTION_CERTAINTY)
+    {
         return false;
     }
     if tier1
         .injection_probability_true
-        .is_some_and(|p| p > 0.10 && p < 0.90)
+        .is_some_and(|p| p > INJECTION_UNCERTAIN_FLOOR && p < INJECTION_CERTAINTY)
     {
         return true;
     }
-    if tier1.risk_class_confidence.is_some_and(|c| c < 0.90) {
+    if tier1
+        .risk_class_confidence
+        .is_some_and(|c| c < RISK_CONFIDENCE_FLOOR)
+    {
         return true;
     }
     if tier == Tier::Unrated {
         return true;
     }
-    if request.service_description.chars().count() > 1_500 {
+    if request.service_description.chars().count() > DESCRIPTION_ESCALATION_CHARS {
         return true;
     }
     // Borderline: above the cap but under twice the cap.
-    request.amount_usd > cap_usd && request.amount_usd <= 2.0 * cap_usd
+    request.amount_usd > cap_usd && request.amount_usd < 2.0 * cap_usd
 }

@@ -28,9 +28,10 @@ pub enum Effect {
     Informational,
 }
 
-/// Which engine produced the evidence (SPEC §6.1 `source`).
+/// Which engine produced the evidence (SPEC §6.1 `source`). Serialises in
+/// snake_case to match the SPEC's own example (`"serv_prompt_guard"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum Source {
     ClefFlash,
     ServPromptGuard,
