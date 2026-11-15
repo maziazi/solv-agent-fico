@@ -11,10 +11,14 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::policy::{FiredRule, RuleEffect};
+use crate::reason::{Reason, ReasonCode};
 use crate::receipt::RULESET_VERSION;
-use crate::reppo::{CriterionVerdict, MAX_UNTRUSTED_CHARS, sanitize_untrusted};
+use crate::reppo::{
+    CriterionVerdict, MAX_UNTRUSTED_CHARS, is_invisible_format_char, sanitize_untrusted,
+};
 use crate::state::{LearnedRule, RuleStatus, Store};
 use crate::tier1::{ClefQuestion, ClefResponse, QuestionKind};
 
@@ -33,6 +37,24 @@ pub const MAX_QUOTE_CHARS: usize = 300;
 pub const RULE_ID_PREFIX: &str = "SOLV-RULE-";
 /// Longest question key built from a rule id.
 const MAX_KEY_CHARS: usize = 32;
+/// How much of a critique topic selection reads, in characters.
+const MAX_SELECTION_CHARS: usize = 2000;
+/// A keyword is ignored when a negator sits within this many words
+/// before it ("no refund", "never a refund"). Longer-range negation
+/// ("never offers a refund") is not detected.
+pub const NEGATION_WINDOW: usize = 2;
+
+/// Reads a stored topic, mapping anything this build does not know (a
+/// topic added by a newer build, a hand-edited value, the wrong type) to
+/// `None` instead of failing the whole snapshot. A rule without a topic is
+/// kept but never compiled, exactly like a rule that predates topics.
+pub fn lenient_topic<'de, D>(deserializer: D) -> Result<Option<RuleTopic>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
 
 /// What a learned rule asks about. The set is closed: a critique that
 /// matches none of these produces no rule.
@@ -70,14 +92,7 @@ impl RuleTopic {
     pub fn spec(self) -> &'static TopicSpec {
         match self {
             RuleTopic::GuaranteedRefund => &TopicSpec {
-                keywords: &[
-                    "refund",
-                    "money-back",
-                    "money back",
-                    "insur",
-                    "reimburse",
-                    "compensat",
-                ],
+                keywords: &["refund", "money back", "insur", "reimburse", "compensat"],
                 instructions: "Does the description promise a guaranteed refund or insurance if the deliverable fails?",
                 true_text: "States or implies a guaranteed refund or insurance.",
                 false_text: "Makes no such promise.",
@@ -113,7 +128,6 @@ impl RuleTopic {
             },
             RuleTopic::OffPlatformPayment => &TopicSpec {
                 keywords: &[
-                    "off-platform",
                     "off platform",
                     "different address",
                     "another wallet",
@@ -157,24 +171,145 @@ impl RuleTopic {
         }
     }
 
-    /// The topic whose keywords appear most often in `critique`, if any.
-    /// Equal counts go to the earlier topic in [`RuleTopic::ALL`].
-    pub fn from_critique(critique: &str) -> Option<RuleTopic> {
-        let lower = critique.to_lowercase();
-        let mut best: Option<(usize, RuleTopic)> = None;
+    /// Chooses the topic for `critique`: the topic with the most distinct
+    /// keywords found as whole words (a keyword may carry a suffix, so
+    /// "refunds" matches "refund", but never sits inside another word) and
+    /// not negated. Two topics tied for most keywords is [`TopicChoice::Ambiguous`]:
+    /// a guess here would put a guardrail on the wrong question.
+    pub fn choose(critique: &str) -> TopicChoice {
+        let words = words(&selection_text(critique));
+        let mut scores: Vec<(RuleTopic, usize)> = Vec::new();
         for topic in RuleTopic::ALL {
             let hits = topic
                 .spec()
                 .keywords
                 .iter()
-                .filter(|keyword| lower.contains(**keyword))
+                .filter(|keyword| keyword_found(&words, keyword))
                 .count();
-            if hits > 0 && best.is_none_or(|(top, _)| hits > top) {
-                best = Some((hits, topic));
+            if hits > 0 {
+                scores.push((topic, hits));
             }
         }
-        best.map(|(_, topic)| topic)
+        let Some(top) = scores.iter().map(|(_, hits)| *hits).max() else {
+            return TopicChoice::NoMatch;
+        };
+        let mut leaders = scores.iter().filter(|(_, hits)| *hits == top);
+        match (leaders.next(), leaders.next()) {
+            (Some((topic, _)), None) => TopicChoice::Selected(*topic),
+            _ => TopicChoice::Ambiguous,
+        }
     }
+
+    /// The selected topic, or `None` for no match and for a tie.
+    pub fn from_critique(critique: &str) -> Option<RuleTopic> {
+        match Self::choose(critique) {
+            TopicChoice::Selected(topic) => Some(topic),
+            TopicChoice::NoMatch | TopicChoice::Ambiguous => None,
+        }
+    }
+}
+
+/// How topic selection ended for one critique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopicChoice {
+    Selected(RuleTopic),
+    /// Several topics tied for the most keywords.
+    Ambiguous,
+    NoMatch,
+}
+
+/// The critique as topic selection reads it: whitespace of any kind becomes
+/// one space, and control and invisible characters are dropped, so text
+/// cannot hide a keyword by splitting it ("re\u{200B}fund") or by routing
+/// around it. Bounded, because the critique comes from outside.
+fn selection_text(critique: &str) -> String {
+    critique
+        .chars()
+        .take(MAX_SELECTION_CHARS)
+        .filter_map(|c| {
+            if c.is_whitespace() {
+                Some(' ')
+            } else if c.is_control() || is_invisible_format_char(c) {
+                None
+            } else {
+                Some(c)
+            }
+        })
+        .collect()
+}
+
+/// Lowercase alphanumeric words. Everything else separates words, except
+/// an apostrophe inside a word, which stays ("doesn't").
+fn words(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            current.extend(c.to_lowercase());
+        } else if (c == '\'' || c == '\u{2019}') && !current.is_empty() {
+            current.push('\'');
+        } else if !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    for word in &mut out {
+        while word.ends_with('\'') {
+            word.pop();
+        }
+    }
+    out.retain(|word| !word.is_empty());
+    out
+}
+
+fn is_negator(word: &str) -> bool {
+    matches!(
+        word,
+        "no" | "not"
+            | "never"
+            | "without"
+            | "cannot"
+            | "non"
+            | "none"
+            | "nor"
+            | "cant"
+            | "dont"
+            | "doesnt"
+            | "didnt"
+            | "wont"
+            | "isnt"
+            | "arent"
+            | "wasnt"
+    ) || word.ends_with("n't")
+}
+
+/// Whether `keyword` (one or more words, each matched as the start of a
+/// word) occurs in `words` and is not negated: no negator within
+/// [`NEGATION_WINDOW`] words before it, and not followed by "free"
+/// ("login-free").
+fn keyword_found(words: &[String], keyword: &str) -> bool {
+    let wanted = self::words(keyword);
+    if wanted.is_empty() || words.len() < wanted.len() {
+        return false;
+    }
+    (0..=words.len() - wanted.len()).any(|start| {
+        let matches = wanted
+            .iter()
+            .enumerate()
+            .all(|(offset, part)| words[start + offset].starts_with(part.as_str()));
+        if !matches {
+            return false;
+        }
+        let end = start + wanted.len();
+        let window_start = start.saturating_sub(NEGATION_WINDOW);
+        let negated = words[window_start..start]
+            .iter()
+            .any(|word| is_negator(word))
+            || words.get(end).is_some_and(|next| next == "free");
+        !negated
+    })
 }
 
 /// Where a rule came from, so it can be contested (SPEC §5.5).
@@ -194,21 +329,36 @@ pub struct RuleDraft {
     pub source: RuleSource,
 }
 
+/// What [`distil_detailed`] made of one evaluation's verdicts.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Distilled {
+    pub drafts: Vec<RuleDraft>,
+    /// Low-scoring critiques that matched several topics equally.
+    pub ambiguous: usize,
+}
+
 /// Turns the verdicts of one settled evaluation into rule drafts: one per
-/// low-scoring critique that matches a topic, at most one per topic.
-pub fn distil(eval_id: &str, verdicts: &[CriterionVerdict]) -> Vec<RuleDraft> {
-    let mut drafts: Vec<RuleDraft> = Vec::new();
+/// low-scoring critique that clearly matches one topic, at most one per
+/// topic. A critique that matches nothing, or ties between topics, makes
+/// no rule.
+pub fn distil_detailed(eval_id: &str, verdicts: &[CriterionVerdict]) -> Distilled {
+    let mut distilled = Distilled::default();
     for verdict in verdicts {
         if !verdict.score.is_finite() || verdict.score > DISTILL_MAX_VERDICT_SCORE {
             continue;
         }
-        let Some(topic) = RuleTopic::from_critique(&verdict.critique) else {
-            continue;
+        let topic = match RuleTopic::choose(&verdict.critique) {
+            TopicChoice::Selected(topic) => topic,
+            TopicChoice::Ambiguous => {
+                distilled.ambiguous += 1;
+                continue;
+            }
+            TopicChoice::NoMatch => continue,
         };
-        if drafts.iter().any(|draft| draft.topic == topic) {
+        if distilled.drafts.iter().any(|draft| draft.topic == topic) {
             continue;
         }
-        drafts.push(RuleDraft {
+        distilled.drafts.push(RuleDraft {
             topic,
             source: RuleSource {
                 eval_id: sanitize_untrusted(eval_id, MAX_UNTRUSTED_CHARS),
@@ -217,7 +367,12 @@ pub fn distil(eval_id: &str, verdicts: &[CriterionVerdict]) -> Vec<RuleDraft> {
             },
         });
     }
-    drafts
+    distilled
+}
+
+/// The drafts of [`distil_detailed`].
+pub fn distil(eval_id: &str, verdicts: &[CriterionVerdict]) -> Vec<RuleDraft> {
+    distil_detailed(eval_id, verdicts).drafts
 }
 
 /// What [`distil_into_store`] did, for the job log.
@@ -229,18 +384,32 @@ pub struct DistilReport {
     pub duplicates: usize,
     /// Drafts dropped because the store is full.
     pub store_full: usize,
+    /// Critiques that matched several topics equally and so made no rule.
+    pub ambiguous: usize,
 }
 
 /// Distils `verdicts` and stores the results as `shadow` rules. Runs in the
 /// Reppo worker, never on the hot path. A critique that matches no topic
-/// leaves no trace beyond the evaluation itself.
+/// leaves no trace beyond the evaluation itself; a tie is counted and
+/// logged without the critique text.
 pub fn distil_into_store(
     store: &Store,
     eval_id: &str,
     verdicts: &[CriterionVerdict],
 ) -> DistilReport {
-    let mut report = DistilReport::default();
-    for draft in distil(eval_id, verdicts) {
+    let distilled = distil_detailed(eval_id, verdicts);
+    let mut report = DistilReport {
+        ambiguous: distilled.ambiguous,
+        ..DistilReport::default()
+    };
+    if distilled.ambiguous > 0 {
+        eprintln!(
+            "solv: evaluation {} had {} critique(s) matching several topics equally; no rule created for them",
+            sanitize_untrusted(eval_id, MAX_UNTRUSTED_CHARS),
+            distilled.ambiguous
+        );
+    }
+    for draft in distilled.drafts {
         match store.add_learned_rule(draft) {
             AddRule::Added(rule_id) => report.created.push(rule_id),
             AddRule::Duplicate => report.duplicates += 1,
@@ -263,6 +432,7 @@ pub enum AddRule {
 pub struct CompiledRule {
     /// `SOLV-RULE-014`, as stored.
     pub rule_id: String,
+    pub topic: RuleTopic,
     /// The question key in the Clef request and answers.
     pub key: String,
     pub effect: RuleEffect,
@@ -297,6 +467,9 @@ pub struct RuleOutcome {
     /// Ids of the rules the response answered: the rules that were in
     /// force for the decision (SPEC §6.3 `rules_applied`).
     pub applied: Vec<String>,
+    /// For each fired rule, its reason-code tail and the structured detail
+    /// that goes on the reason. Never the critique.
+    pub details: Vec<(String, Value)>,
 }
 
 impl CompiledRules {
@@ -306,6 +479,12 @@ impl CompiledRules {
             rules: Vec::new(),
             questions: Vec::new(),
         })
+    }
+
+    /// Whether `other` asks the same questions with the same effects: the
+    /// epoch aside, nothing in force differs.
+    pub fn same_set(&self, other: &CompiledRules) -> bool {
+        self.rules == other.rules && self.questions == other.questions
     }
 
     /// Compiles the `active` rules of `rules`, at most
@@ -349,6 +528,7 @@ impl CompiledRules {
             });
             compiled.push(CompiledRule {
                 rule_id: rule.rule_id.clone(),
+                topic,
                 key,
                 effect: rule.effect,
                 threshold: rule.threshold,
@@ -378,6 +558,16 @@ impl CompiledRules {
                     rule_id: rule.reason_tail(),
                     effect: rule.effect,
                 });
+                outcome.details.push((
+                    rule.reason_tail(),
+                    json!({
+                        "rule_id": rule.rule_id,
+                        "topic": rule.topic,
+                        "question": rule.topic.spec().instructions,
+                        "probability_true": probability,
+                        "threshold": rule.threshold,
+                    }),
+                ));
             }
         }
         outcome
@@ -421,4 +611,21 @@ pub fn next_rule_id(rules: &[LearnedRule]) -> Option<String> {
         .unwrap_or(0);
     let next = highest.checked_add(1)?;
     Some(format!("{RULE_ID_PREFIX}{next:03}"))
+}
+
+/// Replaces the evidence of each learned-rule reason with the rule's detail:
+/// which rule and topic, the question Solv asked (catalogue wording), the
+/// answer, and the threshold. The critique is never part of it.
+pub fn attach_rule_detail(reasons: &mut [Reason], outcome: &RuleOutcome) {
+    for reason in reasons {
+        let ReasonCode::Rule(tail) = &reason.code else {
+            continue;
+        };
+        let Some((_, detail)) = outcome.details.iter().find(|(id, _)| id == tail) else {
+            continue;
+        };
+        if let Some(evidence) = reason.evidence.as_mut() {
+            evidence.detector_output = Some(detail.clone());
+        }
+    }
 }

@@ -81,7 +81,7 @@ pub struct Receipt {
 pub struct LearnedRule {
     pub rule_id: String,
     pub status: RuleStatus,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::rules::lenient_topic")]
     pub topic: Option<crate::rules::RuleTopic>,
     #[serde(default = "default_rule_effect")]
     pub effect: crate::policy::RuleEffect,
@@ -297,7 +297,7 @@ impl Store {
     pub fn set_learned_rules(&self, rules: Vec<LearnedRule>) {
         let mut guard = self.learned_rules.write().expect("learned_rules lock");
         *guard = rules;
-        self.recompile(&guard, false);
+        self.recompile(&guard);
     }
 
     /// The active rules, compiled. The hot path calls this once per
@@ -333,8 +333,8 @@ impl Store {
             threshold: default_rule_threshold(),
             created_from: Some(draft.source),
         });
-        // A shadow rule is not compiled: the active set did not change.
-        self.recompile(&guard, false);
+        // A shadow rule is not compiled, so the active set does not change.
+        self.recompile(&guard);
         AddRule::Added(rule_id)
     }
 
@@ -347,24 +347,31 @@ impl Store {
         let Some(rule) = guard.iter_mut().find(|rule| rule.rule_id == rule_id) else {
             return false;
         };
-        let changed = rule.status != status;
         rule.status = status;
-        self.recompile(&guard, changed);
+        self.recompile(&guard);
+        drop(guard);
+        self.request_snapshot();
         true
     }
 
-    /// Rebuilds the compiled set from `rules`. Callers hold the
-    /// `learned_rules` write lock, so rules, epoch and compiled set move
-    /// together and the lock order is always rules, then compiled.
-    fn recompile(&self, rules: &[LearnedRule], bump_epoch: bool) {
+    /// Rebuilds the compiled set from `rules` and bumps the epoch when the
+    /// set in force changed — whatever caused it: a promotion, a demotion, or
+    /// a wholesale replacement. A change that leaves the compiled set as it
+    /// was (a new shadow rule, a rule that cannot compile) bumps nothing.
+    /// Callers hold the `learned_rules` write lock, so rules, epoch and
+    /// compiled set move together and the lock order is always rules, then
+    /// compiled.
+    fn recompile(&self, rules: &[LearnedRule]) {
         let mut state = self
             .compiled_rules
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if bump_epoch {
+        let mut next = crate::rules::CompiledRules::compile(rules, state.epoch);
+        if !next.same_set(&state.compiled) {
             state.epoch = state.epoch.saturating_add(1);
+            next = crate::rules::CompiledRules::compile(rules, state.epoch);
         }
-        state.compiled = crate::rules::CompiledRules::compile(rules, state.epoch);
+        state.compiled = next;
     }
 
     /// Asks the snapshot worker to persist state after the debounce window.

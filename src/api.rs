@@ -288,7 +288,7 @@ pub async fn pre_spend_check(
         None
     };
 
-    let decision = decide(
+    let mut decision = decide(
         &gate_request,
         profile.as_ref(),
         now,
@@ -302,6 +302,7 @@ pub async fn pre_spend_check(
         &rule_outcome.fired,
         &config,
     );
+    crate::rules::attach_rule_detail(&mut decision.reasons, &rule_outcome);
     let total_ms = started.elapsed().as_millis() as u64;
 
     let receipt_id = new_receipt_id();
