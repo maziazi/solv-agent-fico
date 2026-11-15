@@ -42,7 +42,10 @@ impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
             caps: Caps::default(),
-            block_floor: 550,
+            // Equal to `score::FAIR_FLOOR` by construction: the band that
+            // blocks and the score that blocks are one boundary, pinned by
+            // `block_floor_is_the_fair_floor`.
+            block_floor: score::FAIR_FLOOR,
             safety_floor: 3,
             absolute_cap_usd: 500.00,
             latency_ceiling_ms: 2_000,
@@ -225,7 +228,7 @@ pub fn decide(
     let settled: Option<&SettledScore> = profile.and_then(|p| p.score.as_ref());
     let effective = settled.and_then(|s| score::effective_score(s, now_unix));
     let tier = score::tier_for(effective.map(|s| s.fico_effective));
-    let cap = tier.max_safe_spend_usd(&config.caps);
+    let cap = tier.max_safe_spend_usd(&config.caps, config.absolute_cap_usd);
 
     // Reasons for learned rules that fired with a forcing-hold effect.
     // They attach to every HOLD outcome — including rows 7–11 — so an
@@ -595,7 +598,7 @@ pub fn needs_escalation(
     tier: Tier,
     config: &PolicyConfig,
 ) -> bool {
-    let cap_usd = tier.max_safe_spend_usd(&config.caps);
+    let cap_usd = tier.max_safe_spend_usd(&config.caps, config.absolute_cap_usd);
     // Escalate on a Tier 1 that produced no verdict — down or unparsed —
     // so Tier 2 gets the chance to cover (SOLV-SYSTEM-001, taxonomy §6.2).
     if !tier1.has_verdict() {
@@ -627,4 +630,30 @@ pub fn needs_escalation(
     }
     // Borderline: above the cap but under twice the cap.
     request.amount_usd > cap_usd && request.amount_usd < 2.0 * cap_usd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `POOR` ceiling and the block floor are the same boundary
+    /// (SPEC §4.3). They are configured in different structs, so only a
+    /// test keeps them from drifting apart: a gap would let a `POOR`
+    /// counterparty past row 6, and an overlap would block a `FAIR` one
+    /// that the band table says may be paid.
+    #[test]
+    fn block_floor_is_the_fair_floor() {
+        assert_eq!(PolicyConfig::default().block_floor, score::FAIR_FLOOR);
+    }
+
+    /// The top band's cap tracks the operator ceiling, so the two numbers
+    /// a receipt prints for an `EXCEPTIONAL` approval agree.
+    #[test]
+    fn exceptional_cap_equals_the_absolute_cap() {
+        let config = PolicyConfig::default();
+        assert_eq!(
+            Tier::Exceptional.max_safe_spend_usd(&config.caps, config.absolute_cap_usd),
+            config.absolute_cap_usd
+        );
+    }
 }

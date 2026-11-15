@@ -106,71 +106,100 @@ pub fn effective_score(score: &SettledScore, now_unix: u64) -> Option<EffectiveS
     })
 }
 
-/// Underwriting tiers (SPEC §4.3). `Unrated` is a tier, not an error: a
-/// counterparty nobody has assessed gets no number, and inventing one is
-/// the subtlest form of a false claim.
+/// Floor of the `FAIR` band (SPEC §4.3). `PolicyConfig::block_floor` must
+/// equal this: the band that blocks and the score that blocks are the same
+/// boundary, and two numbers that must agree but are configured apart are
+/// a bug waiting to happen.
+pub const FAIR_FLOOR: u16 = 580;
+/// Floor of the `GOOD` band (SPEC §4.3).
+pub const GOOD_FLOOR: u16 = 670;
+/// Floor of the `VERY_GOOD` band (SPEC §4.3).
+pub const VERY_GOOD_FLOOR: u16 = 740;
+/// Floor of the `EXCEPTIONAL` band (SPEC §4.3).
+pub const EXCEPTIONAL_FLOOR: u16 = 800;
+
+/// Underwriting bands (SPEC §4.3). The four boundaries are the published
+/// FICO band boundaries, so a reader can check them against a public
+/// reference. They are *not* calibrated against outcomes, and SPEC §4.2
+/// carries the words that must travel with them.
+///
+/// `Unrated` is a state, not a band: a counterparty nobody has assessed
+/// gets no number, and inventing one is the subtlest form of a false
+/// claim. It is never folded into `Fair`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Tier {
-    Prime,
-    Standard,
-    Subprime,
-    HighRisk,
+    Poor,
+    Fair,
+    Good,
+    VeryGood,
+    Exceptional,
     Unrated,
 }
 
 impl Tier {
     pub fn as_str(self) -> &'static str {
         match self {
-            Tier::Prime => "PRIME",
-            Tier::Standard => "STANDARD",
-            Tier::Subprime => "SUBPRIME",
-            Tier::HighRisk => "HIGH_RISK",
+            Tier::Poor => "POOR",
+            Tier::Fair => "FAIR",
+            Tier::Good => "GOOD",
+            Tier::VeryGood => "VERY_GOOD",
+            Tier::Exceptional => "EXCEPTIONAL",
             Tier::Unrated => "UNRATED",
         }
     }
 
-    /// The tier's default spending cap under `caps` (SPEC §4.3).
+    /// The band's default spending cap under `caps` (SPEC §4.3).
     ///
     /// Caps are operator-configurable, not hardcoded: whichever values were
     /// active when a decision was made are folded into `ruleset_version`
-    /// and the evidence hash (with PR-08).
-    pub fn max_safe_spend_usd(self, caps: &Caps) -> f64 {
+    /// and the evidence hash.
+    ///
+    /// `Exceptional` carries no cap of its own — it reads the operator's
+    /// absolute ceiling, so the top band can never be configured above the
+    /// hard limit `SOLV-LIMIT-002` enforces. The band raises its cap to
+    /// meet that ceiling; it never removes one. No band is unrestricted.
+    pub fn max_safe_spend_usd(self, caps: &Caps, absolute_cap_usd: f64) -> f64 {
         match self {
-            Tier::Prime => caps.prime_usd,
-            Tier::Standard => caps.standard_usd,
-            Tier::Subprime => caps.subprime_usd,
-            Tier::HighRisk | Tier::Unrated => 0.0,
+            Tier::Exceptional => absolute_cap_usd,
+            Tier::VeryGood => caps.very_good_usd,
+            Tier::Good => caps.good_usd,
+            Tier::Fair => caps.fair_usd,
+            Tier::Poor | Tier::Unrated => 0.0,
         }
     }
 }
 
-/// Default caps in USD per tier (SPEC §4.3). Operator-configurable.
+/// Default caps in USD per band (SPEC §4.3). Operator-configurable.
+///
+/// There is deliberately no `exceptional_usd`: that band reads
+/// `absolute_cap_usd`. See [`Tier::max_safe_spend_usd`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Caps {
-    pub prime_usd: f64,
-    pub standard_usd: f64,
-    pub subprime_usd: f64,
+    pub fair_usd: f64,
+    pub good_usd: f64,
+    pub very_good_usd: f64,
 }
 
 impl Default for Caps {
     fn default() -> Self {
         Self {
-            prime_usd: 500.00,
-            standard_usd: 100.00,
-            subprime_usd: 10.00,
+            fair_usd: 5.00,
+            good_usd: 50.00,
+            very_good_usd: 250.00,
         }
     }
 }
 
-/// Derives the tier from an effective score; `None` (no unexpired settled
+/// Derives the band from an effective score; `None` (no unexpired settled
 /// score) means `UNRATED` (SPEC §4.2 "Cold start").
 pub fn tier_for(fico_effective: Option<u16>) -> Tier {
     match fico_effective {
-        Some(score) if score >= 720 => Tier::Prime,
-        Some(score) if score >= 640 => Tier::Standard,
-        Some(score) if score >= 550 => Tier::Subprime,
-        Some(_) => Tier::HighRisk,
+        Some(score) if score >= EXCEPTIONAL_FLOOR => Tier::Exceptional,
+        Some(score) if score >= VERY_GOOD_FLOOR => Tier::VeryGood,
+        Some(score) if score >= GOOD_FLOOR => Tier::Good,
+        Some(score) if score >= FAIR_FLOOR => Tier::Fair,
+        Some(_) => Tier::Poor,
         None => Tier::Unrated,
     }
 }
@@ -201,22 +230,83 @@ mod tests {
 
     #[test]
     fn tier_wire_strings_are_pinned() {
-        assert_eq!(serde_json::to_string(&Tier::Prime).unwrap(), r#""PRIME""#);
+        assert_eq!(serde_json::to_string(&Tier::Poor).unwrap(), r#""POOR""#);
+        assert_eq!(serde_json::to_string(&Tier::Fair).unwrap(), r#""FAIR""#);
+        assert_eq!(serde_json::to_string(&Tier::Good).unwrap(), r#""GOOD""#);
         assert_eq!(
-            serde_json::to_string(&Tier::Standard).unwrap(),
-            r#""STANDARD""#
+            serde_json::to_string(&Tier::VeryGood).unwrap(),
+            r#""VERY_GOOD""#
         );
         assert_eq!(
-            serde_json::to_string(&Tier::Subprime).unwrap(),
-            r#""SUBPRIME""#
-        );
-        assert_eq!(
-            serde_json::to_string(&Tier::HighRisk).unwrap(),
-            r#""HIGH_RISK""#
+            serde_json::to_string(&Tier::Exceptional).unwrap(),
+            r#""EXCEPTIONAL""#
         );
         assert_eq!(
             serde_json::to_string(&Tier::Unrated).unwrap(),
             r#""UNRATED""#
         );
+    }
+
+    /// Every band boundary, from below and from on it. A band that is one
+    /// point wide in the wrong place is the kind of error no reader of the
+    /// table would catch.
+    #[test]
+    fn band_boundaries_are_exact_from_both_sides() {
+        let cases = [
+            (300, Tier::Poor),
+            (579, Tier::Poor),
+            (580, Tier::Fair),
+            (669, Tier::Fair),
+            (670, Tier::Good),
+            (739, Tier::Good),
+            (740, Tier::VeryGood),
+            (799, Tier::VeryGood),
+            (800, Tier::Exceptional),
+            (850, Tier::Exceptional),
+        ];
+        for (score, expected) in cases {
+            assert_eq!(tier_for(Some(score)), expected, "score {score}");
+        }
+        assert_eq!(tier_for(None), Tier::Unrated);
+    }
+
+    /// The same boundaries expressed in Reppo verdicts, which is how an
+    /// operator actually experiences them (SPEC §4.3). `POOR` covering
+    /// half the Reppo scale and `EXCEPTIONAL` needing 91 are deliberate,
+    /// and pinning them here is what makes them deliberate rather than
+    /// discovered in production.
+    #[test]
+    fn reppo_verdict_boundaries_are_pinned() {
+        let band = |reppo: f64| tier_for(Some(fico_raw(reppo)));
+        assert_eq!(band(50.0), Tier::Poor, "575");
+        assert_eq!(band(51.0), Tier::Fair, "581");
+        assert_eq!(band(67.0), Tier::Fair, "669");
+        assert_eq!(band(68.0), Tier::Good, "674");
+        assert_eq!(band(79.0), Tier::Good, "735");
+        assert_eq!(band(80.0), Tier::VeryGood, "740");
+        assert_eq!(band(90.0), Tier::VeryGood, "795");
+        assert_eq!(band(91.0), Tier::Exceptional, "801");
+    }
+
+    #[test]
+    fn caps_defaults_are_the_spec_table() {
+        let caps = Caps::default();
+        let absolute = 500.00;
+        assert_eq!(Tier::Poor.max_safe_spend_usd(&caps, absolute), 0.00);
+        assert_eq!(Tier::Fair.max_safe_spend_usd(&caps, absolute), 5.00);
+        assert_eq!(Tier::Good.max_safe_spend_usd(&caps, absolute), 50.00);
+        assert_eq!(Tier::VeryGood.max_safe_spend_usd(&caps, absolute), 250.00);
+        assert_eq!(Tier::Unrated.max_safe_spend_usd(&caps, absolute), 0.00);
+    }
+
+    /// `EXCEPTIONAL` tracks the operator's ceiling instead of carrying its
+    /// own number, so no configuration can lift the top band above the
+    /// limit `SOLV-LIMIT-002` enforces.
+    #[test]
+    fn exceptional_never_exceeds_the_operator_ceiling() {
+        let caps = Caps::default();
+        assert_eq!(Tier::Exceptional.max_safe_spend_usd(&caps, 500.00), 500.00);
+        assert_eq!(Tier::Exceptional.max_safe_spend_usd(&caps, 20.00), 20.00);
+        assert_eq!(Tier::Exceptional.max_safe_spend_usd(&caps, 0.00), 0.00);
     }
 }

@@ -298,11 +298,23 @@ of a false claim.
 
 | Tier | `fico_effective` | `max_safe_spend` (USD) | Default decision |
 | --- | --- | --- | --- |
-| `PRIME` | ≥ 720 | 500.00 | `APPROVE` if amount ≤ cap |
-| `STANDARD` | 640–719 | 100.00 | `APPROVE` if amount ≤ cap |
-| `SUBPRIME` | 550–639 | 10.00 | `APPROVE` if amount ≤ cap |
-| `HIGH_RISK` | < 550 | 0.00 | `BLOCK` |
+| `EXCEPTIONAL` | ≥ 800 | operator ceiling (default 500.00) | `APPROVE` if amount ≤ cap |
+| `VERY_GOOD` | 740–799 | 250.00 | `APPROVE` if amount ≤ cap |
+| `GOOD` | 670–739 | 50.00 | `APPROVE` if amount ≤ cap |
+| `FAIR` | 580–669 | 5.00 | `APPROVE` if amount ≤ cap |
+| `POOR` | < 580 | 0.00 | `BLOCK` |
 | `UNRATED` | no settled score | 0.00 | `HOLD` |
+
+*(Reason for the 2026-11-15 change, recorded here per the hard prohibition on
+silent mapping changes: the old PRIME/STANDARD/SUBPRIME/HIGH_RISK names were
+calibrated to no published reference — their boundaries could not be checked
+against anything. The bands are now the public FICO band boundaries
+(580 / 670 / 740 / 800), so a reader can verify them against a standard
+reference. They remain **not calibrated against outcomes**; the words above
+about what that means travel with every receipt. `UNRATED` stays a state,
+never folded into a band. The evidence layout changed with the caps, so
+`RULESET_VERSION` is bumped 1 → 2 and receipts sealed before this change
+remain readable but carry the old tier vocabulary.)*
 
 The caps in this table are operator-configurable defaults, not hardcoded
 constants. Whichever values were active when a decision was made are folded into

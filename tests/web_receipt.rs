@@ -734,7 +734,7 @@ async fn gauge_label_matches_the_visible_score_even_out_of_range() {
 #[tokio::test]
 async fn standard_and_subprime_do_not_borrow_the_hold_colour() {
     let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
-    for tier in ["STANDARD", "SUBPRIME"] {
+    for tier in ["FAIR", "GOOD"] {
         let response = json!({ "tier": tier, "fico_score": 600, "reasons": [] });
         let id = format!("slv_{tier}");
         assert!(store.insert_receipt(id.clone(), crafted_receipt(response, json!({}))));

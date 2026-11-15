@@ -148,12 +148,13 @@ fn stamp_section(id: &str, receipt: &Receipt) -> String {
 fn score_section(response: &Value) -> String {
     let tier = response.get("tier").and_then(Value::as_str).unwrap_or("");
     let tier_class = match tier {
-        "PRIME" => "approve",
+        // §4.3: the top band reads as the approving colour; POOR as the
+        // blocking one. FAIR/GOOD carry no decision colour — a neutral
+        // badge does not suggest an outcome the band does not have.
+        "EXCEPTIONAL" | "VERY_GOOD" => "approve",
         "UNRATED" => "hold",
-        "HIGH_RISK" => "block",
-        // DESIGN §2.4 gives these two no decision colour; a neutral badge
-        // does not suggest an outcome the tier does not carry.
-        "STANDARD" | "SUBPRIME" => "neutral",
+        "POOR" => "block",
+        "FAIR" | "GOOD" => "neutral",
         _ => "unknown",
     };
     let tier_text = if tier_class == "unknown" {

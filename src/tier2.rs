@@ -199,6 +199,25 @@ pub struct ServReasoningClient {
 /// caller bounds the wait; this default only stops a hung socket.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Operator override for the Tier-2 call timeout (`SOLV_TIER2_TIMEOUT_MS`),
+/// mirroring `SOLV_TIER1_TIMEOUT_MS`. The §5.1 budget arithmetic still
+/// bounds every escalation by what is left of the ceiling.
+pub const TIMEOUT_ENV: &str = "SOLV_TIER2_TIMEOUT_MS";
+
+fn timeout_from_env() -> Duration {
+    timeout_from_var(std::env::var(TIMEOUT_ENV).ok().as_deref())
+}
+
+fn timeout_from_var(raw: Option<&str>) -> Duration {
+    match raw {
+        None | Some("") | Some("0") => DEFAULT_TIMEOUT,
+        Some(raw) => raw
+            .parse::<u64>()
+            .map(|ms| Duration::from_millis(ms.max(1)))
+            .unwrap_or(DEFAULT_TIMEOUT),
+    }
+}
+
 impl ServReasoningClient {
     pub fn with_base_url(
         api_key: String,
@@ -218,7 +237,7 @@ impl ServReasoningClient {
 
     pub fn from_env() -> Option<Self> {
         let api_key = std::env::var("SERV_API_KEY").ok()?;
-        Self::with_base_url(api_key, DEFAULT_TIMEOUT, DEFAULT_BASE_URL.to_string()).ok()
+        Self::with_base_url(api_key, timeout_from_env(), DEFAULT_BASE_URL.to_string()).ok()
     }
 }
 
@@ -275,5 +294,17 @@ impl ServClient for MockServClient {
         }
         self.verdict
             .ok_or_else(|| ServError::Parse("mock: no verdict configured".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn the_timeout_var_overrides_the_two_second_default() {
+        assert_eq!(timeout_from_var(None), DEFAULT_TIMEOUT);
+        assert_eq!(timeout_from_var(Some("8000")), Duration::from_millis(8000));
+        assert_eq!(timeout_from_var(Some("bogus")), DEFAULT_TIMEOUT);
     }
 }

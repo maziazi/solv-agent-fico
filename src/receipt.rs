@@ -32,7 +32,12 @@ use crate::score::{EffectiveScore, SettledScore};
 /// `ruleset_version` is this plus the number of changes to the active
 /// learned-rule set (`Store::compiled_rules`), so it is `1` until an
 /// operator promotes a rule. It is part of the hashed evidence.
-pub const RULESET_VERSION: u32 = 1;
+/// v2 (2026-11-15): five FICO-aligned bands replace the four ad-hoc tiers,
+/// per-band caps replace the three tier caps, and the block floor moves
+/// 550 → 580 (`docs/TIERS-V2.md`). Band names and `Caps` field names are
+/// part of the hashed evidence, so a v1 receipt and a v2 receipt are not
+/// comparable and must not be read as if they were.
+pub const RULESET_VERSION: u32 = 2;
 
 /// Lowercase hex SHA-256.
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -220,9 +225,9 @@ pub fn build_evidence(input: &EvidenceInput<'_>) -> Value {
         [
             input.amount_usd,
             input.decision.max_safe_spend_usd,
-            input.config.caps.prime_usd,
-            input.config.caps.standard_usd,
-            input.config.caps.subprime_usd,
+            input.config.caps.fair_usd,
+            input.config.caps.good_usd,
+            input.config.caps.very_good_usd,
             input.config.absolute_cap_usd,
         ]
         .iter()
@@ -279,13 +284,16 @@ pub fn build_evidence(input: &EvidenceInput<'_>) -> Value {
     })
 }
 
-/// The numeric confidence of every Tier 1 answer: `probability_true` for
+/// The numeric confidence of every Tier 1 answer: `noul` for the live
+/// wire shape, `probability_true` for the mock shape, `confidence` for
+/// choice answers.
 /// `noul` questions, `confidence` for choice questions.
 fn confidences(answers: &Map<String, Value>) -> Value {
     let mut out = Map::new();
     for (question, answer) in answers {
         let number = answer
             .get("probability_true")
+            .or_else(|| answer.get("noul"))
             .or_else(|| answer.get("confidence"))
             .filter(|value| value.is_number());
         if let Some(number) = number {

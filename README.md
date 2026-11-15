@@ -183,11 +183,16 @@ every receipt.
 
 | Tier | `fico_effective` | `max_safe_spend` |
 | --- | --- | --- |
-| `PRIME` | ≥ 720 | $500.00 |
-| `STANDARD` | 640–719 | $100.00 |
-| `SUBPRIME` | 550–639 | $10.00 |
-| `HIGH_RISK` | < 550 | $0.00 → `BLOCK` |
+| `EXCEPTIONAL` | ≥ 800 | $500.00 (operator ceiling) |
+| `VERY_GOOD` | 740–799 | $250.00 |
+| `GOOD` | 670–739 | $50.00 |
+| `FAIR` | 580–669 | $5.00 |
+| `POOR` | < 580 | $0.00 → `BLOCK` |
 | `UNRATED` | no settled score | $0.00 → `HOLD` |
+
+The tiers are the published FICO band boundaries (580 / 670 / 740 / 800), so
+they can be checked against a public reference. They are **not calibrated
+against outcomes** — nothing in Solv yet proves these bands predict fraud.
 
 No actor — not the operator, not Reppo, not an API caller — can write a FICO
 score directly. There is no endpoint for it. That is what makes the number on a
@@ -285,6 +290,8 @@ Required environment variables (an `.env.example` ships with PR-01):
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard → AI → Workers AI; token needs Workers AI read/run |
 | `SERV_API_KEY` | [console.openserv.ai](https://console.openserv.ai) |
 | `REPPO_API_KEY` | [eval.reppo.xyz](https://eval.reppo.xyz) → API Key |
+| `SOLV_TIER1_TIMEOUT_MS`, `SOLV_TIER2_TIMEOUT_MS` | Per-call provider timeouts (defaults 250 ms / 2 s per SPEC §2.1). Raise them only on a slower network route — the §2.1 budget targets assume the defaults |
+| `SOLV_LATENCY_CEILING_MS` | The escalated-path hard ceiling (default 2000 ms, SPEC §2.1 G2). Raising it trades the budget for reachability |
 | `SOLV_REPPO_ENABLED` | Set to `1` to let the Reppo client load. Without it a key in `.env` is ignored, because Reppo credits are non-renewable |
 | `SOLV_REPPO_STARTING_CREDITS` | Credit budget the audit worker starts with (default `0`: worker refuses to queue anything). One settled evaluation costs 100 (`CITED`, SPEC §9.1). **No rate limit or auth exists on the audit endpoint** (SPEC §8.2's mitigation is not implemented): anyone who can reach the port can burn the whole budget — set a budget only on a network you control |
 | `PORT`, `STATE_FILE` | Optional; default `8080` and `solv_state.json` |

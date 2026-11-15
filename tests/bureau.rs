@@ -107,7 +107,7 @@ async fn a_settled_evaluation_creates_a_profile_with_the_mapped_score() {
     // The stored score flows through the PR-03 mapping: 300 + round(78 × 5.5).
     let effective = effective_score(&score, score.settled_at_unix).unwrap();
     assert_eq!(effective.fico_raw, 729);
-    assert_eq!(tier_for(Some(effective.fico_effective)), Tier::Prime);
+    assert_eq!(tier_for(Some(effective.fico_effective)), Tier::Good);
 
     assert_eq!(bureau.credits_remaining(), 900);
     assert!(!bureau.is_busy());

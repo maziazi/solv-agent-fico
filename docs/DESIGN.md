@@ -99,9 +99,9 @@ the three decision values in `docs/SPEC.md` §4.3.
 
 | Decision | Text | Background | Also means |
 | --- | --- | --- | --- |
-| `APPROVE` | `#15803D` | `#DCFCE7` | `PRIME` tier, FICO ≥ 720 |
+| `APPROVE` | `#15803D` | `#DCFCE7` | `EXCEPTIONAL`/`VERY_GOOD` tier |
 | `HOLD` | `#B45309` | `#FEF3C7` | `UNRATED`, cold start, cap exceeded |
-| `BLOCK` | `#B91C1C` | `#FEE2E2` | `HIGH_RISK`, injection detected |
+| `BLOCK` | `#B91C1C` | `#FEE2E2` | `POOR`, injection detected |
 
 Colour is never the only signal. Every decision badge carries its word, and
 every reason row carries its code. A red badge with no text fails for colour-blind

@@ -44,6 +44,9 @@ pub struct AppState {
     tier1: Arc<dyn ClefClient>,
     tier2: Arc<dyn ServClient>,
     bureau: Option<Arc<bureau::Bureau>>,
+    /// Resolved once at boot: SPEC §2.1 defaults unless the operator set
+    /// `SOLV_LATENCY_CEILING_MS` for a slower route.
+    policy_config: policy::PolicyConfig,
 }
 
 impl AppState {
@@ -53,7 +56,15 @@ impl AppState {
             tier1,
             tier2,
             bureau: None,
+            policy_config: policy::PolicyConfig::default(),
         }
+    }
+
+    /// Overrides the policy configuration (currently only the §2.1 latency
+    /// ceiling is operator-settable).
+    pub fn with_policy_config(mut self, policy_config: policy::PolicyConfig) -> Self {
+        self.policy_config = policy_config;
+        self
     }
 
     /// Attaches the audit worker. `None` (the default) is the honest
@@ -66,6 +77,10 @@ impl AppState {
 
     pub fn bureau(&self) -> Option<&Arc<bureau::Bureau>> {
         self.bureau.as_ref()
+    }
+
+    pub fn policy_config(&self) -> &policy::PolicyConfig {
+        &self.policy_config
     }
 
     pub fn store(&self) -> &Arc<Store> {
