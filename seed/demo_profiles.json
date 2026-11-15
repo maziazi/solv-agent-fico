@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "counterparties": {
+    "github-rest-api": {
+      "counterparty_name": "github-rest-api",
+      "target_url": "https://api.github.com",
+      "score": {
+        "reppo_score": 100.0,
+        "eval_id": "cmwhy4whj000707jptcchz6fz",
+        "settled_at_unix": 1794754061,
+        "pillars": {
+          "reliability": 5,
+          "track_record": 10,
+          "safety": 5,
+          "maturity": 5
+        }
+      }
+    }
+  }
+}
