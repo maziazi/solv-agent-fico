@@ -104,15 +104,13 @@ const STATE_CLASS: Record<NodeState, string> = {
   ok: "text-ink",
   unavailable: "text-block-ink",
   skipped: "text-muted",
-  idle: "text-muted/60",
+  idle: "text-muted",
 };
 
 function PipelineRow({ node, index, live }: { node: Node; index: number; live: boolean }) {
   return (
     <li
-      className={`flex items-baseline gap-3 border-b border-border py-2.5 last:border-b-0 ${
-        live ? "node-resolve" : ""
-      }`}
+      className={`flex items-baseline gap-3 py-2.5 ${live ? "node-resolve" : ""}`}
       style={live ? { animationDelay: `${index * 120}ms` } : undefined}
     >
       <span aria-hidden className={`w-4 shrink-0 font-mono ${STATE_CLASS[node.state]}`}>
@@ -148,7 +146,7 @@ export function Pipeline({
 }): JSX.Element {
   const nodes = result ? nodesFor(result) : idleNodes();
   return (
-    <section aria-labelledby="pipeline-title" className="border border-border bg-surface p-5">
+    <section aria-labelledby="pipeline-title" className="bg-surface p-5">
       <h2 id="pipeline-title" className="font-head text-xl font-bold">
         Decision pipeline
       </h2>
@@ -160,7 +158,7 @@ export function Pipeline({
             : "nothing has been decided yet — run a check"}
       </p>
       {result && (
-        <div className="mb-4 flex items-center gap-3 border border-border bg-bg px-3 py-2">
+        <div className="mb-4 flex items-center gap-3 bg-bg px-3 py-2">
           <DecisionBadge decision={result.decision} />
           <span className="font-mono text-sm tabular-nums">
             {ms(result.latency_ms.total)} total
@@ -170,7 +168,7 @@ export function Pipeline({
               surfaces lift to the bright accent (5.84:1). */}
           <a
             href={result.receipt_url}
-            className="ml-auto font-mono text-sm text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
+            className="ml-auto font-mono text-sm text-accent-ink underline decoration-accent decoration-1 underline-offset-2"
           >
             public trust receipt ↗
           </a>

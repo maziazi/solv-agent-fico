@@ -308,18 +308,17 @@ enter this repository.
 
 One tagged release deploys one artefact (docs/WORKFLOW.md §4.3): push a `v*`
 tag, approve the `production` environment in the Actions run, and the `cd`
-workflow triggers the Render deploy hook — Render builds the committed
-Dockerfile on its free tier — then verifies `/healthz` answers before
-declaring success. Deploys trigger on tags only — merging to `main` is never
-an accidental release. *(Changed 2026-11-15 from fly.io: the fly account was
-flagged high-risk at creation and could not host an app; Render's free tier
-needs no card.)*
+workflow builds the image, pushes it to `ghcr.io/maziazi/solv-agent-fico`, and
+deploys to the host named by the repository variable `DEPLOY_TARGET`: `render`
+(deploy hook) or `railway` (`railway up`, see `docs/DEPLOY-RAILWAY.md`). It
+then verifies `/healthz` answers before declaring success. Deploys trigger on
+tags only — merging to `main` is never an accidental release. *(fly.io was
+dropped on 2026-11-15: the account was flagged high-risk at creation.)*
 
-Provider credentials are set once in the Render dashboard's service
-environment (they never enter the repository). Required Actions Secrets:
-`RENDER_DEPLOY_HOOK` (the deploy hook URL from the Render service settings).
-Required Actions Variable: `RENDER_SERVICE_HOST` (the hostname the
-post-deploy `/healthz` probe checks, e.g. `solv-gate.onrender.com`).
+Provider credentials are set once in the host's dashboard and never enter the
+repository. Actions Secrets: `RENDER_DEPLOY_HOOK` or `RAILWAY_TOKEN`. Actions
+Variables: `DEPLOY_TARGET`, and `RENDER_SERVICE_HOST` or `RAILWAY_SERVICE` plus
+`RAILWAY_SERVICE_HOST`. **UNPROVEN:** no deploy has run on either host yet.
 
 ## Contributing
 

@@ -2,47 +2,84 @@
  *
  * Hand-written, no build step. Served from memory at /static/app.css under a
  * CSP with no inline styles, so nothing here may depend on a style="" attribute.
- * Fonts: the design faces are named first but are not shipped yet; every stack
- * falls back to system fonts, so no request leaves the origin.
+ * Fonts: IBM Plex, self-hosted from /static/fonts, so no request leaves the origin.
  *
  * Sections: 1 tokens, 2 base, 3 layout, 4 components, 5 receipt page.
  * Later pages add their own section at the end of this file.
  */
 
-/* 1. Tokens: Warm Ledger (light, default) and Obsidian Ledger (dark) */
-:root {
-  --bg: #f8f7f4;
-  --surface: #ffffff;
-  --border: #e2e0d8;
-  --ink: #141413;
-  --muted: #5c5b57;
-  --accent: #d95d39;
-  --approve-ink: #15803d;
-  --approve-bg: #dcfce7;
-  --hold-ink: #b45309;
-  --hold-bg: #fef3c7;
-  --block-ink: #b91c1c;
-  --block-bg: #fee2e2;
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-head: "Space Grotesk", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+/* 1. Tokens: light theme from reppo.xyz. The bright accent #dc5318 is 3.71:1
+ * on the page, so small accent text uses --accent-ink (5.14:1). */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12110f;
-    --surface: #1a1917;
-    --border: #2e2c28;
-    --ink: #f4f2ed;
-    --muted: #a3a09a;
-    --accent: #e8734a;
-    --approve-ink: #86efac;
-    --approve-bg: #052e16;
-    --hold-ink: #fcd34d;
-    --hold-bg: #422006;
-    --block-ink: #fca5a5;
-    --block-bg: #450a0a;
-  }
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-sans-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light;
+  --bg: #f9f7f6;
+  --surface: #efedeb;
+  --wash: #efedeb;
+  --ink: #332d28;
+  --muted: #5a5049;
+  --accent: #dc5318;
+  --accent-ink: #b8420f;
+  /* Flat system: a card is one solid fill, no border, no shadow, no tint.
+   * -ink is text on the page or a card; -solid is a badge or panel fill
+   * (white text on green and red, ink text on amber; all >= 5.5:1). */
+  --approve-ink: #166534;
+  --approve-solid: #166534;
+  --hold-ink: #92400e;
+  --hold-solid: #f2b13c;
+  --block-ink: #b91c1c;
+  --block-solid: #b91c1c;
+  --radius: 0.75rem;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* 2. Base */
@@ -75,7 +112,7 @@ code { font-size: 0.875em; overflow-wrap: anywhere; }
 
 a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 
 .skip-link {
   position: absolute;
@@ -83,7 +120,6 @@ a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 2px; 
   top: 0;
   padding: 0.5rem 1rem;
   background: var(--surface);
-  border: 1px solid var(--border);
 }
 .skip-link:focus { left: 0; z-index: 10; }
 
@@ -107,7 +143,6 @@ a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 2px; 
   gap: 0.25rem 1rem;
   padding-top: 1rem;
   padding-bottom: 1rem;
-  border-bottom: 1px solid var(--border);
 }
 .wordmark { font-family: var(--font-head); font-weight: 700; font-size: 1.25rem; }
 .tagline { color: var(--muted); font-size: 0.875rem; }
@@ -117,7 +152,6 @@ main { padding-top: 1.5rem; padding-bottom: 1.5rem; }
 .site-footer {
   padding-top: 1rem;
   padding-bottom: 2rem;
-  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 0.875rem;
 }
@@ -125,17 +159,17 @@ main { padding-top: 1.5rem; padding-bottom: 1.5rem; }
 /* 4. Components */
 .card, .ledger, .notice {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border-radius: var(--radius);
   padding: 1rem;
   margin: 0 0 1rem;
 }
 
-.notice { border-left: 4px solid var(--hold-ink); }
+.notice { background: var(--hold-solid); color: var(--ink); }
 
 .scroll { overflow-x: auto; }
 
 table { border-collapse: collapse; width: 100%; font-size: 0.9375rem; }
-th, td { text-align: left; padding: 0.375rem 0.75rem 0.375rem 0; border-bottom: 1px solid var(--border); }
+th, td { text-align: left; padding: 0.5rem 0.75rem 0.5rem 0; }
 thead th { color: var(--muted); font-weight: 500; font-size: 0.875rem; }
 tbody th { font-weight: 500; }
 
@@ -148,29 +182,31 @@ tbody th { font-weight: 500; }
 .badge, .chip {
   display: inline-block;
   padding: 0.0625rem 0.5rem;
-  border: 1px solid var(--border);
+  border-radius: 6px;
   font-family: var(--font-head);
   font-weight: 500;
   font-size: 0.8125rem;
   text-transform: uppercase;
   letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--bg);
 }
-.badge--approve, .chip--approve { color: var(--approve-ink); background: var(--approve-bg); border-color: var(--approve-ink); }
-.badge--hold, .chip--hold { color: var(--hold-ink); background: var(--hold-bg); border-color: var(--hold-ink); }
-.badge--neutral, .chip--neutral { color: var(--ink); background: var(--surface); border-color: var(--muted); }
-.badge--block, .chip--block { color: var(--block-ink); background: var(--block-bg); border-color: var(--block-ink); }
+.badge--approve, .chip--approve { color: #fff; background: var(--approve-solid); }
+.badge--hold, .chip--hold { color: var(--ink); background: var(--hold-solid); }
+.badge--neutral, .chip--neutral { color: var(--bg); background: var(--ink); }
+.badge--block, .chip--block { color: #fff; background: var(--block-solid); }
 .chip { font-weight: 400; text-transform: none; font-family: var(--font-mono); font-size: 0.75rem; }
 
 /* 5. Receipt page */
 .stamp {
-  border: 2px solid var(--border);
+  border-radius: var(--radius);
   padding: 1rem;
   margin: 0 0 1rem;
 }
 .stamp h1 { margin: 0; font-size: 1.5rem; overflow-wrap: anywhere; }
-.stamp--approve { color: var(--approve-ink); background: var(--approve-bg); border-color: var(--approve-ink); }
-.stamp--hold { color: var(--hold-ink); background: var(--hold-bg); border-color: var(--hold-ink); }
-.stamp--block { color: var(--block-ink); background: var(--block-bg); border-color: var(--block-ink); }
+.stamp--approve { color: #fff; background: var(--approve-solid); }
+.stamp--hold { color: var(--ink); background: var(--hold-solid); }
+.stamp--block { color: #fff; background: var(--block-solid); }
 .stamp--unknown { color: var(--ink); background: var(--surface); }
 .stamp-note { margin: 0 0 1rem; color: var(--muted); font-size: 0.875rem; }
 
@@ -186,20 +222,19 @@ tbody th { font-weight: 500; }
 .gauge { display: block; width: 100%; max-width: 34rem; height: auto; margin: 0.5rem 0; }
 .gauge-track { fill: var(--bg); stroke: var(--muted); stroke-width: 1; }
 .gauge-fill { fill: var(--ink); }
-.gauge-tick { stroke: var(--accent); stroke-width: 1; }
-.gauge-raw { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
+.gauge-tick { stroke: var(--accent-ink); stroke-width: 1; }
+.gauge-raw { stroke: var(--accent-ink); stroke-width: 2; stroke-dasharray: 3 2; }
 /* The viewBox is 550 units wide; on a 360px screen the gauge is about 294px
  * wide (scale 0.53), so 24 units is about 12.8px on screen. */
 .gauge-label { fill: var(--muted); font-family: var(--font-mono); font-size: 24px; }
 
 .reasons { list-style: none; margin: 0; padding: 0; }
-.reason { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
-.reason:last-child { border-bottom: 0; }
+.reason { padding: 0.75rem 0; }
 .reason-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
 .reason-code { font-weight: 500; font-size: 0.8125rem; }
 
 .evidence { margin-top: 0.5rem; }
-.quote { margin: 0.5rem 0 0; background: var(--bg); border: 1px dashed var(--border); padding: 0.5rem 0.75rem; }
+.quote { margin: 0.5rem 0 0; background: var(--bg); border-radius: 8px; padding: 0.5rem 0.75rem; }
 .quote figcaption { font-size: 0.75rem; color: var(--muted); font-family: var(--font-mono); margin-bottom: 0.25rem; }
 .quote pre, .cmd {
   margin: 0;
@@ -207,9 +242,25 @@ tbody th { font-weight: 500; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.cmd { background: var(--bg); border: 1px solid var(--border); padding: 0.5rem 0.75rem; overflow-x: auto; white-space: pre; }
+.cmd { background: var(--bg); border-radius: 8px; padding: 0.5rem 0.75rem; overflow-x: auto; white-space: pre; }
 
 .hash { font-size: 0.8125rem; overflow-wrap: anywhere; margin-bottom: 0.5rem; }
+
+/* Hash verifier (static/receipt-verify.js): the button and result are built
+   by the script, so a visitor without JavaScript sees neither. */
+.verify-button {
+  font: inherit;
+  padding: 0.375rem 0.75rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+.verify-result { margin-top: 0.5rem; padding: 0.5rem 0.75rem; border-radius: 8px; overflow-wrap: anywhere; }
+.verify-result:empty { display: none; }
+.verify-ok { color: #fff; background: var(--approve-solid); }
+.verify-bad { color: #fff; background: var(--block-solid); }
 
 @media (max-width: 36rem) {
   .display { font-size: 2.25rem; }

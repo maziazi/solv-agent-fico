@@ -12,7 +12,7 @@ function EvidenceBlock({ reason }: { reason: Reason }): JSX.Element | null {
   const evidence = reason.evidence;
   if (!evidence) return null;
   return (
-    <div className="mt-2 border border-dashed border-border bg-bg p-3">
+    <div className="mt-2 bg-bg p-3">
       <p className="font-mono text-xs text-muted">
         untrusted counterparty text · source {evidence.source} · field{" "}
         {evidence.field}
@@ -29,11 +29,11 @@ function EvidenceBlock({ reason }: { reason: Reason }): JSX.Element | null {
 
 export function ReasonList({ reasons }: { reasons: Reason[] }): JSX.Element {
   return (
-    <ol aria-label="reasons" className="border-border">
+    <ol aria-label="reasons" className="">
       {reasons.map((reason, i) => (
         <li
           key={`${reason.code}-${i}`}
-          className="border-b border-border py-3 first:pt-0 last:border-b-0 last:pb-0"
+          className="py-3 first:pt-0 last:pb-0"
         >
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[13px] font-medium">{reason.code}</span>
