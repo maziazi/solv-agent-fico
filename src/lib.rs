@@ -3,6 +3,8 @@
 //! The product specification is `docs/SPEC.md`; the work plan is
 //! `docs/PLAN.md`; build order and PR rules are `docs/WORKFLOW.md`.
 
+pub mod policy;
+pub mod reason;
 pub mod score;
 pub mod state;
 
