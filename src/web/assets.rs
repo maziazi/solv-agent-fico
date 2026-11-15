@@ -46,6 +46,14 @@ pub const ASSETS: &[Asset] = &[
         bytes: include_bytes!("../../static/app.css"),
     },
     Asset {
+        path: "receipt-verify.js",
+        content_type: "text/javascript; charset=utf-8",
+        // The script makes no request, so it asks for nothing but itself.
+        csp: "default-src 'none'; script-src 'self'",
+        cache: "public, max-age=3600",
+        bytes: include_bytes!("../../static/receipt-verify.js"),
+    },
+    Asset {
         path: "spa.js",
         content_type: "text/javascript; charset=utf-8",
         csp: "default-src 'none'; script-src 'self'",
@@ -105,6 +113,15 @@ pub fn css_version() -> &'static str {
             .unwrap_or_default();
         sha256_hex(css)[..16].to_string()
     })
+}
+
+/// A short content hash of the embedded asset `path`, for a `?v=` cache
+/// buster. `None` for a path that is not in [`ASSETS`].
+pub fn asset_version(path: &str) -> Option<String> {
+    ASSETS
+        .iter()
+        .find(|asset| asset.path == path)
+        .map(|asset| sha256_hex(asset.bytes)[..16].to_string())
 }
 
 pub async fn static_asset(Path(path): Path<String>) -> Response {
