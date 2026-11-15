@@ -196,8 +196,12 @@ lines, a monospace SHA-256 evidence hash, no interactive controls.
 
 Order down the page:
 
-1. **Status stamp.** `BLOCKED — $50.00 NOT SPENT` or `APPROVED — $50.00`. Large,
-   semantic colour, with the word.
+1. **Status stamp.** `BLOCKED — $50.00 NOT AUTHORISED`,
+   `HELD — $50.00 NOT AUTHORISED`, or `APPROVED — $50.00`. Large, semantic
+   colour, with the word. Directly beneath it, one standing sentence on every
+   receipt: "Solv's recorded decision for this request. Not an authorisation to
+   pay." Solv returns a decision and never moves money, so it cannot know
+   whether a payment happened; the stamp must not say "spent" or "not spent".
 2. **FICO gauge**, 300–850, showing `fico_effective` with `fico_raw` and `decay`
    annotated beside it. When the score is `null`, the gauge is replaced by the
    word `UNRATED` — the needle never sits at 300 to represent "unknown".

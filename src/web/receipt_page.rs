@@ -23,6 +23,9 @@ const FIELD_MAX_CHARS: usize = 300;
 const KEY_MAX_CHARS: usize = 40;
 const EXTRA_EVIDENCE_KEYS: usize = 8;
 
+const FOOTER: &str =
+    "<p>A receipt is a record of a decision. It is not an authorisation to pay.</p>";
+
 pub async fn receipt_page(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.store().receipt(&id) {
         Some(receipt) => {
@@ -31,14 +34,24 @@ pub async fn receipt_page(State(state): State<AppState>, Path(id): Path<String>)
                 StatusCode::OK,
                 CSP_NO_SCRIPT,
                 "public, max-age=300",
-                layout::page(&title, &render_receipt(&id, &receipt)),
+                layout::render(&layout::Page {
+                    title: &title,
+                    content: &render_receipt(&id, &receipt),
+                    footer: FOOTER,
+                    ..layout::Page::default()
+                }),
             )
         }
         None => html_response(
             StatusCode::NOT_FOUND,
             CSP_NO_SCRIPT,
             "no-store",
-            layout::page("Receipt not found — Solv", &render_not_found()),
+            layout::render(&layout::Page {
+                title: "Receipt not found — Solv",
+                content: &render_not_found(),
+                footer: FOOTER,
+                ..layout::Page::default()
+            }),
         ),
     }
 }
@@ -88,12 +101,16 @@ pub fn render_receipt(id: &str, receipt: &Receipt) -> String {
 // Sections
 // ---------------------------------------------------------------------------
 
+/// Solv records decisions; it does not move money and cannot know whether a
+/// payment happened, so the page never says "spent" or "not spent".
+const STAMP_NOTE: &str = "Solv's recorded decision for this request. Not an authorisation to pay.";
+
 fn stamp_section(id: &str, receipt: &Receipt) -> String {
     let money = format_usd(receipt.amount_usd);
     let (class, text) = match receipt.decision.as_str() {
         "APPROVE" => ("approve", format!("APPROVED — {money}")),
-        "BLOCK" => ("block", format!("BLOCKED — {money} NOT SPENT")),
-        "HOLD" => ("hold", format!("HELD — {money} NOT SPENT")),
+        "BLOCK" => ("block", format!("BLOCKED — {money} NOT AUTHORISED")),
+        "HOLD" => ("hold", format!("HELD — {money} NOT AUTHORISED")),
         _ => ("unknown", "DECISION NOT RECOGNISED".to_string()),
     };
     let request = receipt.evidence.get("request");
@@ -106,8 +123,10 @@ fn stamp_section(id: &str, receipt: &Receipt) -> String {
 
     let mut out = format!(
         "<section class=\"stamp stamp--{class}\" aria-labelledby=\"stamp-title\">\n\
-         <h1 id=\"stamp-title\">{}</h1>\n</section>\n",
-        escape(&text)
+         <h1 id=\"stamp-title\">{}</h1>\n</section>\n\
+         <p class=\"stamp-note\">{}</p>\n",
+        escape(&text),
+        escape(STAMP_NOTE)
     );
     out.push_str(
         "<section class=\"ledger\" aria-label=\"Receipt details\">\n<dl class=\"facts\">\n",
@@ -130,8 +149,11 @@ fn score_section(response: &Value) -> String {
     let tier = response.get("tier").and_then(Value::as_str).unwrap_or("");
     let tier_class = match tier {
         "PRIME" => "approve",
-        "STANDARD" | "SUBPRIME" | "UNRATED" => "hold",
+        "UNRATED" => "hold",
         "HIGH_RISK" => "block",
+        // DESIGN §2.4 gives these two no decision colour; a neutral badge
+        // does not suggest an outcome the tier does not carry.
+        "STANDARD" | "SUBPRIME" => "neutral",
         _ => "unknown",
     };
     let tier_text = if tier_class == "unknown" {
@@ -387,9 +409,12 @@ fn hash_section(id: &str, receipt: &Receipt, ruleset: Option<u64>) -> String {
             "<p class=\"small\">Ruleset version <span class=\"mono\">{ruleset}</span></p>\n"
         ));
     }
+    out.push_str(
+        "<p class=\"small\">This hash covers the <code>evidence</code> only. It does not cover the receipt id or the issue time (docs/SPEC.md §6.3), so the issue time on this page is not tamper-evident.</p>\n",
+    );
     if receipt.evidence.is_object() {
         out.push_str(&format!(
-            "<p class=\"small\">Anyone can recompute this hash. The hash is SHA-256 of the receipt's <code>evidence</code> in canonical JSON: keys sorted by UTF-8 bytes, no whitespace, floats written as Python's <code>repr</code> (docs/SPEC.md §6.3). The reference verifier is <code>tools/recompute_receipt.py</code>, which uses only the Python standard library.</p>\n\
+            "<p class=\"small\">Anyone can recompute this hash. It is the SHA-256 of the receipt's <code>evidence</code> as canonical JSON: keys sorted by UTF-8 bytes, no whitespace between tokens, non-ASCII text left as raw UTF-8, and floats written as Python's <code>repr</code> (docs/SPEC.md §6.3). The reference verifier is <code>tools/recompute_receipt.py</code> in the repository; it uses only the Python standard library.</p>\n\
              <pre class=\"cmd\">curl -s \"$SOLV_HOST/api/v1/receipt/{}\" &gt; receipt.json\npython3 tools/recompute_receipt.py receipt.json</pre>\n",
             escape(id)
         ));
@@ -408,31 +433,32 @@ fn hash_section(id: &str, receipt: &Receipt, ruleset: Option<u64>) -> String {
 /// score is also printed beside it, so the gauge is never the only reading.
 fn gauge(effective: u64, raw: Option<u64>, decay: Option<u64>) -> String {
     let position = |score: u64| score.clamp(300, 850) - 300;
+    // The label carries the same number as the visible text; only the drawn
+    // bar is clamped to the track.
     let mut out = format!(
-        "<svg class=\"gauge\" viewBox=\"0 0 550 48\" role=\"img\" aria-label=\"Score {} on a scale from 300 to 850\" focusable=\"false\">\n\
-         <rect class=\"gauge-track\" x=\"0\" y=\"12\" width=\"550\" height=\"16\"/>\n\
-         <rect class=\"gauge-fill\" x=\"0\" y=\"12\" width=\"{}\" height=\"16\"/>\n",
-        effective.clamp(300, 850),
+        "<svg class=\"gauge\" viewBox=\"0 0 550 64\" role=\"img\" aria-label=\"Score {effective} on a scale from 300 to 850\" focusable=\"false\">\n\
+         <rect class=\"gauge-track\" x=\"0\" y=\"12\" width=\"550\" height=\"22\"/>\n\
+         <rect class=\"gauge-fill\" x=\"0\" y=\"12\" width=\"{}\" height=\"22\"/>\n",
         position(effective)
     );
     for floor in [550u64, 640, 720] {
         let x = position(floor);
         out.push_str(&format!(
-            "<line class=\"gauge-tick\" x1=\"{x}\" y1=\"6\" x2=\"{x}\" y2=\"34\"/>\n\
-             <text class=\"gauge-label\" x=\"{x}\" y=\"46\" text-anchor=\"middle\">{floor}</text>\n"
+            "<line class=\"gauge-tick\" x1=\"{x}\" y1=\"6\" x2=\"{x}\" y2=\"40\"/>\n\
+             <text class=\"gauge-label\" x=\"{x}\" y=\"60\" text-anchor=\"middle\">{floor}</text>\n"
         ));
     }
     if let (Some(raw), Some(decay)) = (raw, decay) {
         if decay > 0 {
             let x = position(raw);
             out.push_str(&format!(
-                "<line class=\"gauge-raw\" x1=\"{x}\" y1=\"4\" x2=\"{x}\" y2=\"36\"/>\n"
+                "<line class=\"gauge-raw\" x1=\"{x}\" y1=\"4\" x2=\"{x}\" y2=\"42\"/>\n"
             ));
         }
     }
     out.push_str(
-        "<text class=\"gauge-label\" x=\"0\" y=\"46\" text-anchor=\"start\">300</text>\n\
-         <text class=\"gauge-label\" x=\"550\" y=\"46\" text-anchor=\"end\">850</text>\n</svg>\n",
+        "<text class=\"gauge-label\" x=\"0\" y=\"60\" text-anchor=\"start\">300</text>\n\
+         <text class=\"gauge-label\" x=\"550\" y=\"60\" text-anchor=\"end\">850</text>\n</svg>\n",
     );
     out
 }
@@ -463,19 +489,24 @@ fn untrusted_inline(text: Option<&str>, max_chars: usize) -> String {
     }
 }
 
-/// `$50.00`; micro amounts keep their significant digits instead of
-/// rounding to `$0.00`.
+/// `$50.00` / `-$50.00`. Micro amounts keep their significant digits instead
+/// of rounding to `$0.00`; anything too small for nine decimals is written in
+/// scientific notation rather than shown as a misleading zero.
 fn format_usd(amount: f64) -> String {
     if !amount.is_finite() {
-        "an unreadable amount".to_string()
-    } else if amount == 0.0 || (0.01..1e15).contains(&amount.abs()) {
-        format!("${amount:.2}")
-    } else if amount.abs() < 0.01 {
-        let text = format!("{amount:.9}");
-        format!("${}", text.trim_end_matches('0'))
-    } else {
-        format!("${amount:e}")
+        return "an unreadable amount".to_string();
     }
+    let sign = if amount < 0.0 { "-" } else { "" };
+    let magnitude = amount.abs();
+    let body = if magnitude == 0.0 || (0.01..1e15).contains(&magnitude) {
+        format!("{magnitude:.2}")
+    } else if (1e-9..0.01).contains(&magnitude) {
+        let text = format!("{magnitude:.9}");
+        text.trim_end_matches('0').to_string()
+    } else {
+        format!("{magnitude:e}")
+    };
+    format!("{sign}${body}")
 }
 
 #[cfg(test)]
@@ -490,6 +521,11 @@ mod tests {
         assert_eq!(format_usd(1e-9), "$0.000000001");
         assert_eq!(format_usd(1e300), "$1e300");
         assert_eq!(format_usd(f64::NAN), "an unreadable amount");
+        assert_eq!(format_usd(-50.0), "-$50.00");
+        assert_eq!(format_usd(-0.000032), "-$0.000032");
+        assert_eq!(format_usd(5e-324), "$5e-324");
+        assert_eq!(format_usd(1e-10), "$1e-10");
+        assert_eq!(format_usd(-0.0), "$0.00");
     }
 
     #[test]
@@ -498,6 +534,7 @@ mod tests {
         assert!(low.contains("width=\"0\""));
         let high = gauge(u64::MAX, Some(u64::MAX), Some(3));
         assert!(high.contains("width=\"550\""));
+        assert!(high.contains(&format!("Score {} on a scale", u64::MAX)));
         assert!(!high.contains("style="));
     }
 }

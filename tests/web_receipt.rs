@@ -172,7 +172,9 @@ fn assert_only_our_markup(html: &str) {
                 if attribute == "href" {
                     let value = value.trim_matches('"').trim_end_matches('/');
                     assert!(
-                        matches!(value, "/static/app.css" | "#main" | "data:,"),
+                        value.strip_prefix("/static/app.css?v=").is_some_and(
+                            |v| !v.is_empty() && v.chars().all(|c| c.is_ascii_hexdigit())
+                        ) || matches!(value, "#main" | "data:,"),
                         "unexpected href {value}"
                     );
                 }
@@ -250,8 +252,8 @@ async fn every_decision_kind_has_a_page_with_stamp_reasons_and_hash() {
 
     for (router, body, stamp) in [
         (&router, &approve, "APPROVED — $50.00"),
-        (&router, &hold, "HELD — $50.00 NOT SPENT"),
-        (&block_router, &block, "BLOCKED — $50.00 NOT SPENT"),
+        (&router, &hold, "HELD — $50.00 NOT AUTHORISED"),
+        (&block_router, &block, "BLOCKED — $50.00 NOT AUTHORISED"),
     ] {
         let url = body["receipt_url"].as_str().unwrap();
         let (status, headers, html) = send(router, url).await;
@@ -601,4 +603,223 @@ async fn stylesheet_is_served_locally_and_pulls_nothing_from_elsewhere() {
     assert_eq!(header(&headers, "x-content-type-options"), "nosniff");
     assert!(!css.contains("@import") && !css.contains("http://") && !css.contains("https://"));
     assert!(!css.contains("url("), "no external or inline resources");
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes
+// ---------------------------------------------------------------------------
+
+/// Every `="..."` attribute value on the page.
+fn attribute_values(html: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut rest = html;
+    while let Some(at) = rest.find("=\"") {
+        let after = &rest[at + 2..];
+        let end = after.find('"').expect("unterminated attribute value");
+        values.push(after[..end].to_string());
+        rest = &after[end + 1..];
+    }
+    values
+}
+
+#[tokio::test]
+async fn slot_markers_in_the_receipt_id_cannot_pull_the_body_into_the_title() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let id = "{{content}}<script>alert(1)</script>{{footer}}{{scripts}}{{head_extra}}{{title}}";
+    assert!(store.insert_receipt(
+        id.to_string(),
+        crafted_receipt(json!({"reasons": []}), json!({}))
+    ));
+    let uri = format!(
+        "/receipt/{}",
+        id.replace('{', "%7B")
+            .replace('}', "%7D")
+            .replace('<', "%3C")
+            .replace('>', "%3E")
+            .replace('/', "%2F")
+    );
+    let (status, _, html) = send(&router, &uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_only_our_markup(&html);
+
+    let title_start = html.find("<title>").unwrap() + 7;
+    let title_end = html.find("</title>").unwrap();
+    let title = &html[title_start..title_end];
+    assert!(!title.contains('<'), "title holds only text: {title}");
+    assert_eq!(html.matches("<main").count(), 1);
+    assert_eq!(html.matches("<footer").count(), 1);
+    assert!(!html.contains("<script"), "the id never becomes markup");
+}
+
+#[tokio::test]
+async fn stamp_is_followed_by_the_not_an_authorisation_sentence_for_every_decision() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    for (decision, stamp) in [
+        ("APPROVE", "APPROVED — $50.00"),
+        ("HOLD", "HELD — $50.00 NOT AUTHORISED"),
+        ("BLOCK", "BLOCKED — $50.00 NOT AUTHORISED"),
+    ] {
+        let mut receipt = crafted_receipt(json!({"reasons": []}), json!({}));
+        receipt.decision = decision.to_string();
+        let id = format!("slv_stamp_{decision}");
+        assert!(store.insert_receipt(id.clone(), receipt));
+        let (_, _, html) = send(&router, &format!("/receipt/{id}")).await;
+        let after_stamp = &html[html.find(stamp).expect(stamp)..];
+        let sentence =
+            "Solv&#39;s recorded decision for this request. Not an authorisation to pay.";
+        let at = after_stamp.find(sentence).expect("sentence shown");
+        assert!(
+            at < 200,
+            "{decision}: the sentence sits right under the stamp"
+        );
+        assert!(
+            !html.contains("NOT SPENT"),
+            "Solv cannot know whether money moved"
+        );
+    }
+}
+
+#[tokio::test]
+async fn hash_section_states_its_scope_and_the_full_canonical_recipe() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let receipt = crafted_receipt(json!({"reasons": []}), json!({"request": {}}));
+    assert!(store.insert_receipt("slv_hashdoc".to_string(), receipt));
+    let (_, _, html) = send(&router, "/receipt/slv_hashdoc").await;
+    for needle in [
+        "does not cover the receipt id or the issue time",
+        "keys sorted by UTF-8 bytes",
+        "no whitespace between tokens",
+        "non-ASCII text left as raw UTF-8",
+        "Python's <code>repr</code>",
+        "tools/recompute_receipt.py",
+    ] {
+        assert!(html.contains(needle), "missing {needle:?}");
+    }
+}
+
+#[tokio::test]
+async fn no_dynamic_value_ever_lands_in_an_attribute() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let m = "ZZMARK";
+    let response = json!({
+        "decision": m, "tier": m, "fico_score": 729, "fico_raw": 735, "decay": 6, "score_age_days": 3,
+        "pillars": { "reliability": 8, "track_record": 7, "safety": 9, "maturity": 7 },
+        "score_source": { "provider": m, "eval_id": m, "settled_at": m },
+        "tier_used": [m],
+        "latency_ms": { "state": 0, "tier1": 40, "total": 41 },
+        "reasons": [{ "code": m, "severity": m, "effect": m, "message": m,
+            "evidence": { "source": m, "field": m, "quote": m, "locator": m, m: m } }]
+    });
+    let evidence =
+        json!({ "request": { "counterparty_id": m, "target_url": m }, "ruleset_version": 1 });
+    assert!(store.insert_receipt(format!("slv_{m}"), crafted_receipt(response, evidence)));
+    let (_, _, html) = send(&router, &format!("/receipt/slv_{m}")).await;
+    assert!(html.contains(m), "the marker is rendered as text");
+    for value in attribute_values(&html) {
+        assert!(!value.contains(m), "dynamic value in attribute: {value}");
+    }
+}
+
+#[tokio::test]
+async fn gauge_label_matches_the_visible_score_even_out_of_range() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    let response =
+        json!({ "tier": "PRIME", "fico_score": 900, "fico_raw": 900, "decay": 0, "reasons": [] });
+    assert!(store.insert_receipt("slv_over".to_string(), crafted_receipt(response, json!({}))));
+    let (_, _, html) = send(&router, "/receipt/slv_over").await;
+    assert!(html.contains("900<span class=\"unit\"> / 850</span>"));
+    assert!(html.contains("aria-label=\"Score 900 on a scale from 300 to 850\""));
+}
+
+#[tokio::test]
+async fn standard_and_subprime_do_not_borrow_the_hold_colour() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    for tier in ["STANDARD", "SUBPRIME"] {
+        let response = json!({ "tier": tier, "fico_score": 600, "reasons": [] });
+        let id = format!("slv_{tier}");
+        assert!(store.insert_receipt(id.clone(), crafted_receipt(response, json!({}))));
+        let (_, _, html) = send(&router, &format!("/receipt/{id}")).await;
+        assert!(html.contains(&format!("badge--neutral\">{tier}")), "{tier}");
+        assert!(!html.contains(&format!("badge--hold\">{tier}")), "{tier}");
+    }
+}
+
+#[tokio::test]
+async fn amounts_format_honestly_for_negative_and_denormal_values() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    for (amount, expected) in [(-50.0, "-$50.00"), (5e-324, "$5e-324")] {
+        let mut receipt = crafted_receipt(json!({"reasons": []}), json!({}));
+        receipt.decision = "APPROVE".to_string();
+        receipt.amount_usd = amount;
+        let id = format!("slv_amt_{}", amount.abs().to_bits());
+        assert!(store.insert_receipt(id.clone(), receipt));
+        let (_, _, html) = send(&router, &format!("/receipt/{id}")).await;
+        assert!(
+            html.contains(&format!("APPROVED — {expected}")),
+            "{amount}: {expected}"
+        );
+        assert!(!html.contains("$-") && !html.contains("$0.<"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared shell
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn stylesheet_url_is_versioned_by_content_and_static_routes_are_table_driven() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    assert!(store.insert_receipt(
+        "slv_css".to_string(),
+        crafted_receipt(json!({"reasons": []}), json!({}))
+    ));
+    let (_, _, html) = send(&router, "/receipt/slv_css").await;
+    let at = html.find("/static/app.css?v=").expect("versioned href");
+    let version: String = html[at + 18..]
+        .chars()
+        .take_while(|c| c.is_ascii_hexdigit())
+        .collect();
+    assert!(version.len() >= 12, "{version}");
+
+    let (status, _, css) = send(&router, &format!("/static/app.css?v={version}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let expected = solv::receipt::sha256_hex(css.as_bytes());
+    assert!(
+        expected.starts_with(&version),
+        "version is the SHA-256 prefix of the served bytes"
+    );
+
+    for uri in [
+        "/static/missing.css",
+        "/static/..%2FCargo.toml",
+        "/static/app.css%2F..%2F..%2FCargo.toml",
+        "/static/%2e%2e/Cargo.toml",
+    ] {
+        let (status, headers, body) = send(&router, uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(header(&headers, "x-content-type-options"), "nosniff");
+        assert!(
+            !body.contains("[package]"),
+            "{uri} must never reach the filesystem"
+        );
+    }
+
+    // The bare directory matches no asset route at all and falls through to
+    // the router's default 404, which has an empty body.
+    let (status, _, body) = send(&router, "/static/").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn shell_slots_for_head_footer_and_scripts_are_empty_or_filled_never_leaked() {
+    let (router, store, _dir) = build(MockClefClient::default(), MockServClient::default(), vec![]);
+    assert!(store.insert_receipt(
+        "slv_slots".to_string(),
+        crafted_receipt(json!({"reasons": []}), json!({}))
+    ));
+    let (_, _, html) = send(&router, "/receipt/slv_slots").await;
+    assert!(!html.contains("{{"), "no unfilled slot marker");
+    assert!(html.contains("A receipt is a record of a decision."));
+    assert!(!html.contains("<script"));
 }

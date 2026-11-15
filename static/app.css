@@ -157,6 +157,7 @@ tbody th { font-weight: 500; }
 }
 .badge--approve, .chip--approve { color: var(--approve-ink); background: var(--approve-bg); border-color: var(--approve-ink); }
 .badge--hold, .chip--hold { color: var(--hold-ink); background: var(--hold-bg); border-color: var(--hold-ink); }
+.badge--neutral, .chip--neutral { color: var(--ink); background: var(--surface); border-color: var(--muted); }
 .badge--block, .chip--block { color: var(--block-ink); background: var(--block-bg); border-color: var(--block-ink); }
 .chip { font-weight: 400; text-transform: none; font-family: var(--font-mono); font-size: 0.75rem; }
 
@@ -171,6 +172,7 @@ tbody th { font-weight: 500; }
 .stamp--hold { color: var(--hold-ink); background: var(--hold-bg); border-color: var(--hold-ink); }
 .stamp--block { color: var(--block-ink); background: var(--block-bg); border-color: var(--block-ink); }
 .stamp--unknown { color: var(--ink); background: var(--surface); }
+.stamp-note { margin: 0 0 1rem; color: var(--muted); font-size: 0.875rem; }
 
 .display {
   font-family: var(--font-mono);
@@ -182,11 +184,13 @@ tbody th { font-weight: 500; }
 }
 
 .gauge { display: block; width: 100%; max-width: 34rem; height: auto; margin: 0.5rem 0; }
-.gauge-track { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
+.gauge-track { fill: var(--bg); stroke: var(--muted); stroke-width: 1; }
 .gauge-fill { fill: var(--ink); }
 .gauge-tick { stroke: var(--accent); stroke-width: 1; }
 .gauge-raw { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
-.gauge-label { fill: var(--muted); font-family: var(--font-mono); font-size: 10px; }
+/* The viewBox is 550 units wide; at a 360px screen it scales to about 0.6, so
+ * 18 units is about 11px on screen. */
+.gauge-label { fill: var(--muted); font-family: var(--font-mono); font-size: 18px; }
 
 .reasons { list-style: none; margin: 0; padding: 0; }
 .reason { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }

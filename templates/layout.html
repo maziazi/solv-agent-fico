@@ -7,7 +7,8 @@
 <meta name="robots" content="noindex">
 <title>{{title}}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="{{css_href}}">
+{{head_extra}}
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -19,7 +20,8 @@
 {{content}}
 </main>
 <footer class="site-footer">
-<p>A receipt is a record of a decision. It is not an authorisation to pay.</p>
+{{footer}}
 </footer>
+{{scripts}}
 </body>
 </html>
