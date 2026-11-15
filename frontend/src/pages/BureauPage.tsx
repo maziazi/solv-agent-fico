@@ -42,7 +42,7 @@ function DirectoryTable({ entries }: { entries: CounterpartyEntry[] }): JSX.Elem
     <section aria-labelledby="directory-title" className="border border-border bg-surface p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="directory-title" className="font-head text-xl font-bold">
-          Counterparty directory
+          Counterparty registry
         </h2>
         <p className="text-sm text-muted">
           sort by{" "}
@@ -229,7 +229,7 @@ function QuotaMeter({ response }: { response: DirectoryResponse }): JSX.Element 
   );
 }
 
-export function BureauPage(): JSX.Element {
+export function ExplorerPage(): JSX.Element {
   const [data, setData] = useState<DirectoryResponse | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -248,23 +248,23 @@ export function BureauPage(): JSX.Element {
   return (
     <div className="mx-auto max-w-[76rem] px-4 py-8 sm:px-6">
       <header className="mb-6">
-        <h1 className="font-head text-3xl font-bold tracking-tight">Bureau directory</h1>
-        <p className="mt-1 text-sm text-muted">
-          Who an agent has paid, what the bureau knows about them, and which
-          guardrails the gate is carrying. Numbers come from real receipts —
-          the{" "}
-          <Link to="/" className="underline decoration-1 underline-offset-2">
+        <h1 className="font-head text-3xl font-bold tracking-tight">Explorer</h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted">
+          Every counterparty the registry has a settled score for, the
+          guardrails the gate is currently carrying, and the evaluation quota
+          behind them. Numbers come from real receipts — the{" "}
+          <Link to="/desk" className="underline decoration-1 underline-offset-2">
             desk
           </Link>{" "}
-          produces them.
+          produces them, and each one is addressable and verifiable.
         </p>
       </header>
 
       <div className="flex flex-col gap-6" role="status" aria-live="polite">
         {failed && (
           <p role="alert" className="border-l-4 border-hold-ink bg-hold-bg px-4 py-3 text-sm">
-            The directory could not be read. Treat everything below as absent,
-            not as empty — a bureau you cannot read is not a bureau with
+            The registry could not be read. Treat everything below as absent,
+            not as empty — a registry you cannot read is not a registry with
             nobody in it.
           </p>
         )}
