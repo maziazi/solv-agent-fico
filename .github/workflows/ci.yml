@@ -122,3 +122,11 @@ jobs:
         env:
           PORT: 8080
           STATE_FILE: ci_state.json
+
+  docker-build:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the release image (no push)
+        run: docker build -t solv-ci:${{ github.sha }} .
