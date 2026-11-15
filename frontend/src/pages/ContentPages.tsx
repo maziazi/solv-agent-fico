@@ -150,13 +150,21 @@ export function HowItWorksPage(): JSX.Element {
 
       <Block id="registry" title="The counterparty registry">
         <p className="max-w-3xl text-muted">
-          An independent evaluator scores a counterparty against four pillars —
-          is the service live and consistent with its claim, is there public
-          evidence of completed work, does its public text contain instructions
-          aimed at a buying agent, and how deep is the record over time. The
-          verdict maps deterministically onto the 300–850 range, decays with
-          age, and is discarded entirely after 90 days.
+          An independent evaluator panel scores a counterparty, and the verdict
+          maps deterministically onto the 300–850 range, decays with age, and is
+          discarded entirely after 90 days. The receipt carries four pillars
+          (reliability, track record, safety, maturity), but the panel scores
+          its own dimensions: for a claim check it returned accuracy, evidence
+          and precision. Those fill the track-record pillar; the other three
+          sit at a neutral 5 because nothing measured them. The headline score
+          is the panel's verdict, not an average of the four pillars.
         </p>
+        <Unproven>
+          Scores attach to a claimed name and URL. They are not yet bound to a
+          verified identity such as a domain or a wallet, so a name can be
+          impersonated. Binding is planned; until then, compare the URL on the
+          receipt with the one you are about to pay.
+        </Unproven>
         <BandLegend />
       </Block>
 
@@ -180,13 +188,23 @@ export function HowItWorksPage(): JSX.Element {
         <p className="max-w-3xl text-muted">
           The gate itself is measured, in process, with mocked providers: a p50
           of 47 µs and a p95 of 58 µs over 1,000 checks, with the state read at
-          52 ns against a 200,000 ns budget. That is the cost of Solv's own
-          logic, and nothing more.
+          52 ns against a 200,000 ns budget; a separate criterion benchmark puts
+          a full request through the router at about 24 µs. That is the cost of
+          Solv's own logic, and nothing more.
+        </p>
+        <p className="max-w-3xl text-muted">
+          Against live providers on 2026-11-15, Tier 1 (Clef) had a median of
+          394 ms over 12 requests. Checks that went on to Tier 2 took about 3.7
+          s at the median over 34 requests, and none of those 34 finished at
+          Tier 1 alone: an unrated counterparty always escalates, and for the
+          one rated counterparty tested the Tier 1 risk-class confidence (0.27)
+          stayed below the 0.90 floor. A Reppo audit took 156 s and 273 s in two
+          runs.
         </p>
         <Unproven>
-          End-to-end latency against live providers has not been measured. The
-          figures in the specification are targets, and a target is not a
-          result.
+          These are single-session samples, not a service level. The targets in
+          the specification (Tier 1 under 90 ms at the median, escalated under
+          900 ms) were not met in them, and latency at real volume is unmeasured.
         </Unproven>
       </Block>
     </Page>
@@ -228,6 +246,11 @@ export function DocsPage(): JSX.Element {
           The name and URL are stored verbatim on a public receipt. Send only
           what you would publish.
         </p>
+        <Unproven>
+          A score belongs to the name and URL it was audited under, not to a
+          verified identity (domain or wallet). A name can be impersonated;
+          binding is planned. Check the URL on the receipt before paying.
+        </Unproven>
       </Block>
 
       <Block id="read" title="Endpoints">
@@ -306,8 +329,8 @@ export function PricingPage(): JSX.Element {
       <Block id="costs" title="What a check costs to run">
         <p className="max-w-3xl text-muted">
           Two of the three tiers sit on the hot path. The third is an
-          independent evaluation that settles in at least ten minutes (`CITED`, Reppo API docs) and never
-          touches a payment decision in progress.
+          independent evaluation that took 156 s and 273 s in two live runs
+          (`MEASURED`, n=2) and never touches a payment decision in progress.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm">
@@ -321,9 +344,9 @@ export function PricingPage(): JSX.Element {
             <tbody>
               {[
                 ["Gate logic", "Every check", "Measured: p95 58 µs in process. Effectively free."],
-                ["Tier 1 reflex", "Every check", "One small-model call per check."],
-                ["Tier 2 escalation", "Only when uncertain", "Assumed ~10% of checks — an assumption, not a measurement."],
-                ["Tier 3 evaluation", "Off the hot path", "100 credits per settled evaluation. The free tier is 1,000 credits — ten evaluations, not renewable."],
+                ["Tier 1 small model", "Every check", "One small-model call per check; median 394 ms measured (n=12)."],
+                ["Tier 2 escalation", "Unrated counterparties and uncertain checks", "All 34 measured checks escalated, so assume every check pays for it until that changes. Median about 3.7 s per escalated check."],
+                ["Tier 3 evaluation", "Off the hot path", "440 credits per completed evaluation, about $0.22 (Reppo reference; 1 USDC buys 2,000 credits). A new Reppo account starts with a one-time 22,000 credits."],
               ].map(([component, when, basis]) => (
                 <tr key={component} className="border-b border-border last:border-0">
                   <td className="py-2 pr-4 font-medium">{component}</td>

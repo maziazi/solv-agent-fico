@@ -12,6 +12,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { JSX } from "react";
 import { Link, NavLink } from "react-router-dom";
 
+import { SolvMark } from "./Logo";
+
 interface NavItem {
   label: string;
   to: string;
@@ -138,8 +140,10 @@ export function SiteHeader(): JSX.Element {
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-bg/95 backdrop-blur">
       <div className="mx-auto flex max-w-[76rem] items-center gap-6 px-4 py-3 sm:px-6">
-        <Link to="/" className="flex items-baseline gap-2">
-          <span aria-hidden className="inline-block h-3 w-3 bg-accent-fill" />
+        <Link to="/" className="flex items-center gap-2.5" aria-label="Solv, home">
+          <span className="text-accent-fill">
+            <SolvMark size={22} />
+          </span>
           <span className="font-head text-xl font-bold tracking-tight">
             Solv
           </span>
