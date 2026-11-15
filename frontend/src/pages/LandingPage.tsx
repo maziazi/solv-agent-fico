@@ -87,7 +87,7 @@ function Hero(): JSX.Element {
     <section aria-labelledby="hero-title" className="py-14 sm:py-20">
       <div className="grid gap-10 lg:grid-cols-[1fr_1.1fr] lg:items-start">
         <div>
-          <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-accent-fill">
             Pre-spend gate &amp; counterparty registry
           </p>
           <h1
@@ -202,9 +202,9 @@ const EVIDENCE: {
   },
   {
     value: "0",
-    label: "actors who can write a score",
+    label: "endpoints that set a score",
     level: "PROVEN",
-    source: "No write endpoint exists. Operators included.",
+    source: "No endpoint sets a score. The audit worker writes only what a settled evaluation says.",
   },
   {
     value: "recomputable",
@@ -459,7 +459,7 @@ export function LandingPage(): JSX.Element {
               key={step.n}
               className="flex flex-col gap-1 border-b border-border px-5 py-4 last:border-0 sm:flex-row sm:items-baseline sm:gap-6"
             >
-              <span className="font-mono text-sm text-accent sm:w-10">
+              <span className="font-mono text-sm text-accent-fill sm:w-10">
                 {step.n}
               </span>
               <span className="font-head text-lg font-medium sm:w-56">

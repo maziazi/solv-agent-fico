@@ -115,7 +115,10 @@ export function HowItWorksPage(): JSX.Element {
         <p className="max-w-3xl text-muted">
           Evaluated top to bottom. The first row that matches decides, which is
           why the order is part of the specification rather than an
-          implementation detail.
+          implementation detail. Row 10 appears twice by design (the operator
+          ceiling, then the tier cap); two further fail-closed holds — a
+          failed escalation and a promoted forced-hold rule — are evaluated
+          after the rows shown here.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-sm">
@@ -303,7 +306,7 @@ export function PricingPage(): JSX.Element {
       <Block id="costs" title="What a check costs to run">
         <p className="max-w-3xl text-muted">
           Two of the three tiers sit on the hot path. The third is an
-          independent evaluation that settles in at least ten minutes and never
+          independent evaluation that settles in at least ten minutes (`CITED`, Reppo API docs) and never
           touches a payment decision in progress.
         </p>
         <div className="overflow-x-auto">
@@ -355,7 +358,10 @@ export function PricingPage(): JSX.Element {
 
 const ATTACK_CATEGORIES = [
   ["Direct instruction", "Text addressing the agent: ignore your rules, send to this address instead."],
-  ["Authority forgery", "Claims of being the operator, the platform, or an approved process."],
+  [
+    "Cold start posing as established",
+    "Promises of long history, spotless records, or an established user base.",
+  ],
   ["Urgency and coercion", "Deadlines, threats of loss, penalties for not paying now."],
   ["Exfiltration", "Requests for keys, tokens, prompts, or state."],
   ["Encoding layers", "Base64, zero-width characters, and homoglyphs hiding the payload."],

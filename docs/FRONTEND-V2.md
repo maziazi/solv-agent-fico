@@ -1,6 +1,6 @@
 # Frontend v2 — landing page, navigation, and the public explorer
 
-Status: **PROPOSAL**. Not implemented. `docs/DESIGN.md` remains the binding
+Status: **PARTIALLY IMPLEMENTED** (2026-11-15): the landing page, navbar, desk move to `/desk`, explorer at `/explorer`, content pages, and band legend shipped; `/agent/:id` pages, the search bar, and the remaining §5 pages are future work. `docs/DESIGN.md` remains the binding
 visual system; this document extends it with new pages and does not replace its
 colour, typography, or accessibility rules.
 
