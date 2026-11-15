@@ -416,11 +416,27 @@ The standard Tier 1 call carries four fixed questions, plus learned rules
 
 1. `answers.injection.probability_true` sits in the uncertain band, between 0.10
    and 0.90; or
-2. `answers.risk_class.confidence < 0.90`; or
-3. `tier == "UNRATED"` (cold start); or
+2. `answers.risk_class.confidence < 0.90`, except that an `UNRATED`
+   counterparty whose `risk_class` is `none` does not escalate on confidence
+   alone (see below); or
+3. (removed) `tier == "UNRATED"` no longer escalates by itself; or
 4. `service_description` exceeds 1,500 characters; or
 5. `amount_usd` exceeds `max_safe_spend` but stays under 2× the cap — a borderline
    case worth thinking about.
+
+**Cold start does not escalate by itself (changed 2026-11-16).** An `UNRATED`
+counterparty is always a forced `HOLD` with `SOLV-COLDSTART-001` (§5.4 row 9),
+whatever Tier 2 says. A clean Tier 1 would therefore spend 3-7 seconds on a
+verdict that cannot change the outcome. Evidence still escalates: an uncertain
+injection probability, a risky `risk_class`, a suspicious span found by the
+local deterministic scan (base64, zero-width and homoglyph layering that Tier 1
+can miss, §8.3), a description over 1,500 characters, a borderline amount, or
+a Tier 1 that failed.
+Guarantees that change: an `UNRATED` receipt for a clean request no longer
+carries a Tier 2 reading of the claim. Guarantees that do not: it is still a
+`HOLD`, `reasons[]` is still populated, `APPROVE` is still unreachable without
+a settled score and a live tier verdict, certain injection still `BLOCK`s, and
+a failed Tier 1 still escalates.
 
 If `answers.injection.probability_true ≥ 0.90`, Tier 2 is **skipped** and the
 decision is `BLOCK` immediately. An obvious injection does not need discussion;
@@ -1030,6 +1046,7 @@ labels. Without a label, the claim must not be written.
 | Blended cost under $0.0005 per check | **UNPROVEN** | The §10 arithmetic is sound, but unmeasured |
 | Attack Lab: zero `APPROVE` on the injection corpus | **PROVEN** | `the_corpus_never_approves_and_every_reason_holds` (`tests/attack.rs`): 20 cases across the six §8.3 categories, zero approvals, span honesty checked per case |
 | Fail-closed: no path to `APPROVE` with all tiers down | **PROVEN** | `all_detectors_down_hold_fail_closed_and_never_approve` (`tests/attack.rs`) drives a full request with both providers failing and asserts HOLD on `SOLV-SYSTEM-003` |
+| Tier 1 `risk_class` confidence on clean vs attack text | **MEASURED** | 2026-11-16, live Clef-flash, Tier 1 only, 44 calls (`cargo run --release --example tier1_measure`). Clean (12 real-service descriptions x rated/unrated, n=24): confidence min 0.293, p50 0.371, max 0.514, class `none` 23 of 24, **0 of 24 at or above 0.90**. Attack Lab corpus (n=20): confidence min 0.065, p50 0.281, p90 0.758, max 0.789, **0 of 20 at or above 0.90**; injection probability at or above 0.90 on 4 of 20, in 0.10-0.90 on 10, at or below 0.10 on 6 (all six are overclaim, cold-start-pose or encoded text). Clean injection probability max 0.084. Where both answered `none`, attack confidence max 0.282 vs clean min 0.304: a 0.02 gap on small n, too thin to set a threshold. Decision: the 0.90 floor is unchanged (it also gates row 3 BLOCK); only the cold-start escalation rule changed. Corpus is mock-authored and small; calibration is **UNPROVEN** |
 | Gate-side hot-path cost over mock detectors | **MEASURED** | 2026-11-15, n=1000 clean checks in-process: p50 **47 µs**, p95 **58 µs**, max 733 µs per request including axum and serialisation; criterion (default 100 samples per function): state read **52 ns** (budget 200 000 ns), policy gate **153 ns**, full offline request **27 µs**. Commands: `cargo bench` and `cargo run --release --example load_run -- 1000`. Floor only — provider latency is not measured; the end-to-end budget row above stays as it is |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
 | A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |

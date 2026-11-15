@@ -592,6 +592,12 @@ fn finish(
 /// consulted only when at least one rule fires — and never when Tier 1 is
 /// already certain of injection (≥ 0.90), where discussion only adds latency
 /// and cost. A Tier 1 failure escalates (`SOLV-SYSTEM-001`, taxonomy §6.2).
+///
+/// An `UNRATED` counterparty does not escalate merely for being unrated: its
+/// outcome is a forced `HOLD` (row 9) whatever Tier 2 says, so a clean Tier 1
+/// would pay seconds of latency for a verdict that cannot change the result.
+/// Evidence still escalates it — an uncertain injection probability, a risky
+/// `risk_class`, a long description, or a failed Tier 1.
 pub fn needs_escalation(
     request: &PreSpendRequest,
     tier1: &Tier1Signals,
@@ -616,13 +622,22 @@ pub fn needs_escalation(
     {
         return true;
     }
-    if tier1
-        .risk_class_confidence
-        .is_some_and(|c| c < RISK_CONFIDENCE_FLOOR)
+    // Low confidence in a "nothing unusual" answer is not evidence of risk,
+    // and for an UNRATED counterparty Tier 2 cannot change the HOLD anyway.
+    let unrated_and_unremarkable =
+        tier == Tier::Unrated && matches!(tier1.risk_class, None | Some(RiskClass::None));
+    if !unrated_and_unremarkable
+        && tier1
+            .risk_class_confidence
+            .is_some_and(|c| c < RISK_CONFIDENCE_FLOOR)
     {
         return true;
     }
-    if tier == Tier::Unrated {
+    // Layered encodings (base64, zero-width) can pass Tier 1 unseen; the
+    // local span scan sees them in microseconds, so a suspicious span keeps
+    // the Tier 2 guard in the loop for an unrated counterparty too.
+    if tier == Tier::Unrated && crate::spans::injection_span(&request.service_description).is_some()
+    {
         return true;
     }
     if request.service_description.chars().count() > DESCRIPTION_ESCALATION_CHARS {
