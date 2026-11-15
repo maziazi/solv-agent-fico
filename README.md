@@ -308,15 +308,18 @@ enter this repository.
 
 One tagged release deploys one artefact (docs/WORKFLOW.md §4.3): push a `v*`
 tag, approve the `production` environment in the Actions run, and the `cd`
-workflow builds the release image remotely, pushes provider credentials from
-Actions Secrets to platform secrets (`--stage`, never to the repository), and
-verifies `/healthz` answers before declaring success. Deploys trigger on tags
-only — merging to `main` is never an accidental release.
+workflow triggers the Render deploy hook — Render builds the committed
+Dockerfile on its free tier — then verifies `/healthz` answers before
+declaring success. Deploys trigger on tags only — merging to `main` is never
+an accidental release. *(Changed 2026-11-15 from fly.io: the fly account was
+flagged high-risk at creation and could not host an app; Render's free tier
+needs no card.)*
 
-Required Actions Secrets: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
-`SERV_API_KEY`, `REPPO_API_KEY`, `FLY_API_TOKEN`. Required Actions Variables:
-`FLY_APP_NAME` (the fly app both flyctl steps pin) and `FLY_APP_HOST` (the
-hostname the post-deploy `/healthz` probe checks).
+Provider credentials are set once in the Render dashboard's service
+environment (they never enter the repository). Required Actions Secrets:
+`RENDER_DEPLOY_HOOK` (the deploy hook URL from the Render service settings).
+Required Actions Variable: `RENDER_SERVICE_HOST` (the hostname the
+post-deploy `/healthz` probe checks, e.g. `solv-gate.onrender.com`).
 
 ## Contributing
 

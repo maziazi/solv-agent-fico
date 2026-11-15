@@ -81,13 +81,15 @@ pub const MAX_TARGET_URL_BYTES: usize = 2048;
 /// shape; tests use the same values under a paused clock.
 #[derive(Debug, Clone)]
 pub struct BureauConfig {
-    /// First poll delay after the settlement window has closed.
+    /// First poll delay after submission.
     pub poll_initial: Duration,
-    /// Poll delay ceiling; the delay doubles up to this.
+    /// Poll delay ceiling; the delay doubles up to this. Production keeps it
+    /// equal to `poll_initial` (15 s): the two live runs finished 156 s and
+    /// 273 s after submission, and the 30 s doubling to 300 s used earlier
+    /// left the result unseen for about 90 s after it was ready.
     pub poll_max: Duration,
-    /// How long past the window an evaluation may stay `PENDING` before the
-    /// job is given up on. Reppo says results usually arrive within five
-    /// minutes of the window closing.
+    /// How long an evaluation may stay unfinished before the job is given up
+    /// on.
     pub max_overdue: Duration,
     /// Wait before retrying a submit that hit a transient error or a 409.
     pub submit_retry_backoff: Duration,
@@ -111,8 +113,8 @@ pub struct BureauConfig {
 impl Default for BureauConfig {
     fn default() -> Self {
         Self {
-            poll_initial: Duration::from_secs(30),
-            poll_max: Duration::from_secs(300),
+            poll_initial: Duration::from_secs(15),
+            poll_max: Duration::from_secs(15),
             max_overdue: Duration::from_secs(120 * 60),
             submit_retry_backoff: Duration::from_secs(60),
             max_reschedules: 2,
