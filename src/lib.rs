@@ -34,13 +34,16 @@ pub const DEFAULT_PORT: u16 = 8080;
 /// State file used when `STATE_FILE` is unset or empty.
 pub const DEFAULT_STATE_FILE: &str = "solv_state.json";
 
-/// Shared application state handed to every handler: the state store and
-/// the two tier clients behind their traits.
+/// Shared application state handed to every handler: the state store, the
+/// two tier clients behind their traits, and — when the operator has
+/// enabled and budgeted Reppo — the audit worker that owns the single
+/// evaluation slot.
 #[derive(Clone)]
 pub struct AppState {
     store: Arc<Store>,
     tier1: Arc<dyn ClefClient>,
     tier2: Arc<dyn ServClient>,
+    bureau: Option<Arc<bureau::Bureau>>,
 }
 
 impl AppState {
@@ -49,7 +52,20 @@ impl AppState {
             store,
             tier1,
             tier2,
+            bureau: None,
         }
+    }
+
+    /// Attaches the audit worker. `None` (the default) is the honest
+    /// fail-closed state: enqueueing is impossible and the directory says
+    /// the worker is not attached, rather than showing a zero meter.
+    pub fn with_bureau(mut self, bureau: Option<Arc<bureau::Bureau>>) -> Self {
+        self.bureau = bureau;
+        self
+    }
+
+    pub fn bureau(&self) -> Option<&Arc<bureau::Bureau>> {
+        self.bureau.as_ref()
     }
 
     pub fn store(&self) -> &Arc<Store> {
@@ -75,6 +91,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(web::spa::spa_index))
         .route("/api/v1/directory", get(directory))
         .route("/api/v1/pre-spend-check", post(api::pre_spend_check))
+        .route("/api/v1/audit-counterparty", post(api::audit_counterparty))
         .route("/api/v1/receipt/{id}", get(receipt::get_receipt))
         .route("/bureau", get(web::spa::spa_index))
         .merge(web::routes())
@@ -111,11 +128,16 @@ pub async fn run_server(
 /// `src/directory.rs`; this handler only gathers the store snapshots.
 async fn directory(State(state): State<AppState>) -> Json<directory::DirectoryPayload> {
     let store = state.store();
+    let reppo = match state.bureau() {
+        Some(worker) => directory::ReppoQuota::attached(worker.credits_remaining()),
+        None => directory::ReppoQuota::not_attached(),
+    };
     let payload = directory::build(
         api::now_unix(),
         &store.list_profiles(),
         &store.list_receipts(),
         &store.learned_rules(),
+        reppo,
     );
     Json(payload)
 }
@@ -398,6 +420,132 @@ mod tests {
         assert_eq!(reppo["worker_attached"], false);
         assert_eq!(reppo["credits_remaining"], serde_json::Value::Null);
         assert_eq!(json["metrics"]["receipts_total"], 1);
+    }
+
+    /// A worker over the scripted mock, with a live credit budget, plus
+    /// its temp store. The mock never reaches the network.
+    fn test_state_with_worker(credits: u32) -> (tempfile::TempDir, AppState) {
+        use crate::bureau::{Bureau, BureauConfig};
+        use crate::reppo::{MockOutcome, MockReppoClient};
+        let (dir, state) = test_state();
+        // One scripted settled evaluation. The enqueue leg never touches
+        // the client — the worker is aborted before it can accept a job —
+        // so the outcome is spare rather than consumed by these tests.
+        let client: Arc<dyn reppo::ReppoClient> = Arc::new(MockReppoClient::new(
+            vec![MockOutcome::Settled {
+                reppo_score: 84.0,
+                pillars: [8, 8, 8, 8],
+            }],
+            0,
+        ));
+        let config = BureauConfig {
+            starting_credits: credits,
+            ..BureauConfig::default()
+        };
+        let (worker, handle) = Bureau::spawn(client, state.store().clone(), config);
+        handle.abort(); // the enqueue path never needs the polling loop
+        (dir, state.with_bureau(Some(Arc::new(worker))))
+    }
+
+    #[tokio::test]
+    async fn audit_endpoint_queues_and_returns_the_202_contract() {
+        let (_dir, state) = test_state_with_worker(500);
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/audit-counterparty")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "counterparty_id": "datafeed-pro",
+                            "target_url": "https://api.example.com/v1/feed",
+                            "claim": "Real-time market data, 1 month access."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "QUEUED");
+        assert_eq!(json["queue_position"], 1);
+        assert_eq!(json["settlement_minutes"], 10);
+        assert!(json["estimated_settle_at"].as_str().is_some());
+        assert_eq!(json["credits_remaining"], 500);
+        assert!(json["note"].as_str().unwrap().contains("10 minutes"));
+    }
+
+    #[tokio::test]
+    async fn audit_endpoint_refuses_when_the_credit_budget_is_spent() {
+        let (_dir, state) = test_state_with_worker(0);
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/audit-counterparty")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "counterparty_id": "someone",
+                            "target_url": "https://someone.example/api",
+                            "claim": "A claim."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("credit"));
+    }
+
+    #[tokio::test]
+    async fn audit_endpoint_answers_503_when_the_worker_is_not_attached() {
+        let (_dir, state) = test_state();
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/audit-counterparty")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "counterparty_id": "someone",
+                            "target_url": "https://someone.example/api",
+                            "claim": "A claim."
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn directory_reports_the_live_worker_and_credit_counter() {
+        let (_dir, state) = test_state_with_worker(500);
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/directory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["reppo"]["worker_attached"], true);
+        assert_eq!(json["reppo"]["credits_remaining"], 500);
     }
 
     #[tokio::test]

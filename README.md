@@ -282,6 +282,7 @@ Required environment variables (an `.env.example` ships with PR-01):
 | `SERV_API_KEY` | [console.openserv.ai](https://console.openserv.ai) |
 | `REPPO_API_KEY` | [eval.reppo.xyz](https://eval.reppo.xyz) → API Key |
 | `SOLV_REPPO_ENABLED` | Set to `1` to let the Reppo client load. Without it a key in `.env` is ignored, because Reppo credits are non-renewable |
+| `SOLV_REPPO_STARTING_CREDITS` | Credit budget the audit worker starts with (default `0`: worker refuses to queue anything). One settled evaluation costs 100 (`CITED`, SPEC §9.1). **No rate limit or auth exists on the audit endpoint** (SPEC §8.2's mitigation is not implemented): anyone who can reach the port can burn the whole budget — set a budget only on a network you control |
 | `PORT`, `STATE_FILE` | Optional; default `8080` and `solv_state.json` |
 
 Keys live only in a gitignored `.env` and in GitHub Actions Secrets. They never
