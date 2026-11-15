@@ -10,6 +10,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY benches ./benches
+COPY seed ./seed
 COPY static ./static
 COPY templates ./templates
 COPY frontend/dist ./frontend/dist
