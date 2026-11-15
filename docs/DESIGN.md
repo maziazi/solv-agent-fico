@@ -158,6 +158,7 @@ receipts and each carrying a `docs/SPEC.md` §9 verification label:
 | Total fraud blocked (USD) | Sum of `amount_usd` over `BLOCK` receipts | MEASURED |
 | Median Tier 1 latency | p50 from stored receipts | MEASURED |
 | Cost per check | Computed from token counts and published prices | CITED |
+| Cost per check, until receipts record token counts | renders `—` with the word `no data`, labelled UNPROVEN — a cost figure without token counts would be a constant dressed up as a measurement | UNPROVEN |
 
 If a metric has no data yet it renders as `—` with the word `no data`. It never
 renders a placeholder number. A hero metric that is secretly a constant is the
@@ -267,36 +268,43 @@ self-defeating.
 
 ## 6. Frontend implementation
 
-HTML, Tailwind CSS, and Alpine.js, embedded directly into the Rust binary:
+React + TypeScript (built with Vite), styled with Tailwind CSS compiled at
+build time, embedded directly into the Rust binary:
 
 ```rust
-const INDEX_HTML: &str = include_str!("../templates/index.html");
+const SPA_INDEX: &str = include_str!("../../frontend/dist/index.html");
 ```
 
 Four consequences worth the constraint:
 
-1. One deployable artefact. No Node build step, no second server.
+1. One deployable artefact. No Node process at runtime; `pnpm build` runs at
+   development/build time only, and its output (`spa.js`, `spa.css`, fonts)
+   is what the binary embeds.
 2. No external request on first paint, so the page's own load time does not
    undercut a product whose claim is speed.
 3. The page can be served from memory, which keeps it off the hot path's
    critical resources.
-4. Templates are reviewable as plain text in a PR diff.
+4. The desk stays reviewable: the API contract lives in typed structs
+   (`frontend/src/types.ts`) mirroring SPEC §7, and the embedded output is a
+   fixed set of flat files in `src/web/assets.rs`.
 
 Decisions that follow from it:
 
-- **Tailwind is compiled to a single static CSS file at build time, not loaded
-  from a CDN.** A CDN script would add an uncached third-party round-trip to a
-  page that advertises sub-200ms decisions.
+- **Tailwind is compiled to a single static CSS file at build time, not
+  loaded from a CDN.** A CDN script would add an uncached third-party
+  round-trip to a page that advertises sub-200ms decisions.
 - **Fonts are self-hosted woff2, subset to Latin, embedded with
-  `include_bytes!`.** Google Fonts would work but adds two DNS lookups and a
-  third-party dependency to the critical path.
-- **Alpine.js over HTMX** for the simulator, because the pipeline view is
-  client-side state over one JSON response rather than a series of partial
-  fetches. One `POST /api/v1/pre-spend-check`, then render nodes from the
-  `latency_ms` and `reasons[]` fields already in the payload.
-- **The receipt page uses no JavaScript at all.** It is server-rendered, which
-  is the correct choice for an audit artefact: it renders identically with
-  scripting disabled, and it has nothing to make interactive.
+  `include_bytes!`** (SIL OFL; see `THIRD_PARTY_NOTICES.md`). Google Fonts
+  would work but adds DNS lookups and a third-party dependency to the
+  critical path.
+- **React over Alpine.js/HTMX** for the simulator (owner's decision for this
+  codebase): the pipeline view is client-side state over one JSON response
+  rather than a series of partial fetches. One `POST /api/v1/pre-spend-check`,
+  then render nodes from the `latency_ms` and `reasons[]` fields already in
+  the payload.
+- **The receipt page uses no JavaScript at all.** It is server-rendered,
+  which is the correct choice for an audit artefact: it renders identically
+  with scripting disabled, and it has nothing to make interactive.
 
 ### 6.1 Content Security Policy
 

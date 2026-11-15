@@ -284,6 +284,18 @@ impl Store {
         self.receipts.get(id).map(|entry| entry.value().clone())
     }
 
+    /// All receipts, sorted by id so metrics and directory output are
+    /// deterministic across runs.
+    pub fn list_receipts(&self) -> Vec<(ReceiptId, Receipt)> {
+        let mut entries: Vec<_> = self
+            .receipts
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries
+    }
+
     // Lock poisoning is treated as unrecoverable: the critical sections are
     // trivial clones and assignments that cannot panic, so a poisoned lock
     // means memory corruption, not a recoverable state.
