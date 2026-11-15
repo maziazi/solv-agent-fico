@@ -142,8 +142,10 @@ Scale, 1.25 ratio from a 16px base:
 
 ## 4. Routing: three pages
 
-Three routes. No navigation menu — each page links forward to exactly where a
-reader needs to go next.
+Three routes. Each page links forward to exactly where a reader needs to go
+next. *(2026-11-15: with the third page live, a minimal header nav — desk,
+bureau — was added at the owner's direction for cross-page discoverability;
+forward links stay, and the header stays to two words.)*
 
 ### 4.1 `/` — The Underwriting Desk
 
@@ -225,7 +227,10 @@ inline event handlers. `docs/SPEC.md` §8.2 lists this as a tracked threat.
 
 1. **Directory table.** Every assessed counterparty: name, tier badge,
    `fico_effective`, evidence age, last decision. Sortable by score and by age.
-2. **Learned Guardrails panel.** Rules from `docs/SPEC.md` §5.5, split into
+2. **Learned Guardrails panel.** *(2026-11-15: rows show the rule question,
+   effect, threshold, and the born-from quote; the trigger count from the
+   first draft is omitted until such a counter exists in the data model —
+   rendering one would be a fabricated measurement.)* Rules from `docs/SPEC.md` §5.5, split into
    `active` and `shadow`. Each row shows the rule question, its effect, trigger
    count, and the Reppo critique quote it was born from. `shadow` rules are
    visibly labelled as not yet enforcing.

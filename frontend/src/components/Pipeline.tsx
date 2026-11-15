@@ -165,11 +165,12 @@ export function Pipeline({
           <span className="font-mono text-sm tabular-nums">
             {ms(result.latency_ms.total)} total
           </span>
-          {/* Terracotta never carries body-size text (DESIGN §2.3): the link
-              uses the darkened accent fill, 6.01:1 on the surface. */}
+          {/* DESIGN §2.3: terracotta never carries body-size text. The
+              darkened accent fill passes on light surfaces (6.02:1); dark
+              surfaces lift to the bright accent (5.84:1). */}
           <a
             href={result.receipt_url}
-            className="ml-auto font-mono text-sm text-accent-fill underline decoration-accent decoration-1 underline-offset-2"
+            className="ml-auto font-mono text-sm text-accent-fill underline decoration-accent decoration-1 underline-offset-2 dark:text-accent"
           >
             public trust receipt ↗
           </a>

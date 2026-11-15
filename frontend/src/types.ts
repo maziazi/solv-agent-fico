@@ -58,10 +58,51 @@ export interface PreSpendCheckResponse {
   receipt_url: string;
 }
 
-export interface DirectoryEntry {
+export interface LastDecision {
+  // Narrower than the wire format (Receipt.decision is a free string):
+  // true for every receipt this system writes; a tampered snapshot would
+  // render an uncoloured badge — degraded, not dangerous (SPEC §8.1).
+  decision: "APPROVE" | "HOLD" | "BLOCK";
+  receipt_id: string;
+  receipt_url: string;
+  amount_usd: number;
+  created_at_unix: number;
+}
+
+export interface CounterpartyEntry {
   counterparty_id: string;
   counterparty_name: string;
   target_url: string;
+  // UNRATED until a settled evaluation backs a score.
+  tier: string;
+  fico_effective: number | null;
+  score_age_days: number | null;
+  last_decision: LastDecision | null;
+}
+
+export interface RuleSource {
+  eval_id: string;
+  criterion: string;
+  critique_quote: string;
+}
+
+export interface LearnedRuleEntry {
+  rule_id: string;
+  // The question this rule contributes to the Clef call — present only when
+  // the rule has a topic (identity-only legacy rules have none).
+  question: string | null;
+  // "shadow" until an operator promotes it — the UI must keep that visible.
+  status: "shadow" | "active";
+  topic: string | null;
+  effect: string;
+  threshold: number;
+  created_from: RuleSource | null;
+}
+
+export interface ReppoQuota {
+  worker_attached: boolean;
+  credits_remaining: number | null;
+  quota_total: number;
 }
 
 // SPEC §7.4: metrics are computed from real receipts, never constants. A
@@ -81,7 +122,9 @@ export interface DirectoryMetrics {
 }
 
 export interface DirectoryResponse {
-  counterparties: DirectoryEntry[];
+  counterparties: CounterpartyEntry[];
+  learned_rules: LearnedRuleEntry[];
+  reppo: ReppoQuota;
   metrics: DirectoryMetrics;
 }
 

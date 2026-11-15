@@ -16,6 +16,14 @@ export function SiteHeader(): JSX.Element {
         <p className="text-sm text-muted">
           pre-spend gate & credit bureau for AI agents
         </p>
+        <nav aria-label="pages" className="ml-auto flex gap-4 font-mono text-sm">
+          <Link to="/" className="underline decoration-1 underline-offset-2">
+            desk
+          </Link>
+          <Link to="/bureau" className="underline decoration-1 underline-offset-2">
+            bureau
+          </Link>
+        </nav>
       </div>
     </header>
   );
