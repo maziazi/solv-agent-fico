@@ -71,7 +71,7 @@ pub struct ClefQuestion {
 }
 
 impl ClefQuestion {
-    fn to_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         let mut question = json!({
             "type": match self.kind {
                 QuestionKind::Noul { .. } => "noul",
@@ -84,10 +84,22 @@ impl ClefQuestion {
             QuestionKind::Noul {
                 true_text,
                 false_text,
-            } => match (true_text, false_text) {
-                (Some(t), Some(f)) => json!({ "true": t, "false": f }),
-                _ => Value::Null,
-            },
+            } => {
+                // Criteria is optional for noul; whichever half is
+                // specified serialises — never silently dropped.
+                let mut criteria = Map::new();
+                if let Some(t) = true_text {
+                    criteria.insert("true".to_string(), Value::from(t.as_str()));
+                }
+                if let Some(f) = false_text {
+                    criteria.insert("false".to_string(), Value::from(f.as_str()));
+                }
+                if criteria.is_empty() {
+                    Value::Null
+                } else {
+                    Value::Object(criteria)
+                }
+            }
             QuestionKind::Choice { options } => {
                 json!(
                     options
@@ -115,6 +127,14 @@ pub struct ClefRequest {
 impl ClefRequest {
     /// Serialises into the wire body of SPEC §5.1.
     pub fn to_body(&self) -> Value {
+        // Clef accepts 1-64 questions per request (SPEC §5.1). Four are
+        // fixed and learned rules add at most 8 (SPEC §5.5), so this is a
+        // invariant guard, not an expected failure.
+        debug_assert!(
+            (1..=64).contains(&self.questions.len()),
+            "clef-flash accepts 1-64 questions, got {}",
+            self.questions.len()
+        );
         let questions: Map<String, Value> = self
             .questions
             .iter()
@@ -203,9 +223,12 @@ pub fn standard_request(state: ClefState) -> ClefRequest {
 }
 
 /// A parsed Clef-flash response: the `answers` object keyed by question.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+///
+/// Constructed by the client after unwrapping the Workers-AI envelope;
+/// deliberately not `Deserialize` so a future `resp.json::<ClefResponse>()`
+/// on the raw (nested) body cannot silently yield empty answers.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClefResponse {
-    #[serde(default)]
     pub answers: Map<String, Value>,
 }
 
@@ -365,7 +388,15 @@ impl ClefClient for CloudflareClefClient {
 #[derive(Debug, Clone, Default)]
 pub struct MockClefClient {
     pub answers: Map<String, Value>,
-    pub fail_with_status: Option<u16>,
+    pub fail_with: Option<MockFailure>,
+}
+
+/// The failure shapes PR-06's fail-closed wiring must survive, without
+/// constructing uncloneable transport errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MockFailure {
+    Status(u16),
+    Parse,
 }
 
 impl MockClefClient {
@@ -381,7 +412,7 @@ impl MockClefClient {
         );
         Self {
             answers,
-            fail_with_status: None,
+            fail_with: None,
         }
     }
 }
@@ -389,8 +420,14 @@ impl MockClefClient {
 #[async_trait]
 impl ClefClient for MockClefClient {
     async fn ask(&self, _request: &ClefRequest) -> Result<ClefResponse, ClefError> {
-        if let Some(status) = self.fail_with_status {
-            return Err(ClefError::Status(status));
+        match self.fail_with {
+            Some(MockFailure::Status(status)) => return Err(ClefError::Status(status)),
+            Some(MockFailure::Parse) => {
+                return Err(ClefError::Parse(
+                    "mock: result.answers object missing".to_string(),
+                ));
+            }
+            None => {}
         }
         Ok(ClefResponse {
             answers: self.answers.clone(),

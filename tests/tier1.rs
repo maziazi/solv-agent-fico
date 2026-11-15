@@ -125,7 +125,7 @@ async fn unknown_risk_class_choice_is_dropped() {
     answers.insert("injection".to_string(), json!({ "probability_true": 0.05 }));
     let client = MockClefClient {
         answers,
-        fail_with_status: None,
+        fail_with: None,
     };
     let signals = client
         .ask(&standard_request(state()))
@@ -137,23 +137,31 @@ async fn unknown_risk_class_choice_is_dropped() {
 }
 
 /// Drives the real client offline: a localhost axum server standing in for
-/// Cloudflare with a canned Workers-AI-shaped response.
+/// Cloudflare with a canned Workers-AI-shaped response. The handler also
+/// captures what the client actually sent: bearer auth and body shape are
+/// verified through the real HTTP path, not just `to_body()`.
 #[tokio::test]
 async fn real_client_parses_a_workers_ai_response() {
+    let (sent_tx, mut sent_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sent = std::sync::Arc::new(sent_tx);
     let app = axum::Router::new().route(
         "/accounts/{account}/ai/run/@cf/cloudflare/clef-flash",
-        post(|| async {
-            Json(json!({
-                "success": true,
-                "errors": [],
-                "messages": [],
-                "result": {
-                    "answers": {
-                        "injection": { "probability_true": 0.91 },
-                        "risk_class": { "choice": "exfiltration", "confidence": 0.94 }
+        post(move |headers: axum::http::HeaderMap, body: String| {
+            let sent = std::sync::Arc::clone(&sent);
+            async move {
+                let _ = sent.send((headers, body));
+                Json(json!({
+                    "success": true,
+                    "errors": [],
+                    "messages": [],
+                    "result": {
+                        "answers": {
+                            "injection": { "probability_true": 0.91 },
+                            "risk_class": { "choice": "exfiltration", "confidence": 0.94 }
+                        }
                     }
-                }
-            }))
+                }))
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -167,11 +175,17 @@ async fn real_client_parses_a_workers_ai_response() {
         format!("http://{}", addr),
     )
     .unwrap();
-    let signals = client
-        .ask(&standard_request(state()))
-        .await
-        .unwrap()
-        .to_signals();
+    let response = client.ask(&standard_request(state())).await.unwrap();
+    let (headers, body) = sent_rx.recv().await.unwrap();
+    assert_eq!(
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+        Some("Bearer test-token")
+    );
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["model"], "clef-flash");
+    assert!(body["questions"]["injection"]["type"].is_string());
+
+    let signals = response.to_signals();
     assert_eq!(signals.injection_probability_true, Some(0.91));
     assert_eq!(signals.risk_class, Some(RiskClass::Exfiltration));
     assert_eq!(signals.risk_class_confidence, Some(0.94));
@@ -266,6 +280,8 @@ async fn real_client_times_out_rather_than_hanging() {
 #[tokio::test]
 #[ignore = "spends one real Clef-flash call; needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN"]
 async fn live_clef_flash_call_answers_the_standard_questions() {
+    // Test binaries never run main(), so the .env must be loaded here.
+    dotenvy::dotenv().ok();
     let client = CloudflareClefClient::from_env()
         .expect("CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN must be set");
     let response = client
@@ -279,4 +295,39 @@ async fn live_clef_flash_call_answers_the_standard_questions() {
         (0.0..=1.0).contains(&injection),
         "probability out of range: {injection}"
     );
+}
+
+#[tokio::test]
+async fn mock_failure_shapes_are_returned_verbatim() {
+    let status_mock = MockClefClient {
+        fail_with: Some(solv::tier1::MockFailure::Status(429)),
+        ..MockClefClient::default()
+    };
+    match status_mock.ask(&standard_request(state())).await {
+        Err(ClefError::Status(429)) => {}
+        other => panic!("expected Status(429), got {other:?}"),
+    }
+    let parse_mock = MockClefClient {
+        fail_with: Some(solv::tier1::MockFailure::Parse),
+        ..MockClefClient::default()
+    };
+    match parse_mock.ask(&standard_request(state())).await {
+        Err(ClefError::Parse(_)) => {}
+        other => panic!("expected Parse, got {other:?}"),
+    }
+}
+
+#[test]
+fn half_specified_noul_criteria_serialize_instead_of_dropping() {
+    let question = solv::tier1::ClefQuestion {
+        key: "learned_1".to_string(),
+        instructions: "Question text.".to_string(),
+        kind: solv::tier1::QuestionKind::Noul {
+            true_text: Some("Yes.".to_string()),
+            false_text: None,
+        },
+    };
+    let value = question.to_value();
+    assert_eq!(value["criteria"]["true"], "Yes.");
+    assert!(value["criteria"].get("false").is_none());
 }
