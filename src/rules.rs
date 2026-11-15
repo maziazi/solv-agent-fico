@@ -78,6 +78,16 @@ pub struct TopicSpec {
     pub false_text: &'static str,
 }
 
+/// The catalogue topics whose readings the standard `risk_class` question
+/// already covers (SPEC §1.3: urgency pressure → coercion, credential
+/// request → exfiltration, unverifiable claim → overclaim). Documented set,
+/// pinned by `three_of_six_topics_overlap_the_risk_class_question`.
+pub const TOPICS_OVERLAPPING_RISK_CLASS: [RuleTopic; 3] = [
+    RuleTopic::UrgencyPressure,
+    RuleTopic::CredentialRequest,
+    RuleTopic::UnverifiableClaim,
+];
+
 impl RuleTopic {
     /// Catalogue order; also the tie-break between equally good matches.
     pub const ALL: [RuleTopic; 6] = [

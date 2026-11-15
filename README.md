@@ -6,7 +6,7 @@ the latency budget a payment path actually has, and always attaches reasons that
 trace back to evidence.
 
 > **Status: implemented.** The full sixteen-PR plan (docs/WORKFLOW.md §3)
-> has merged: the deterministic gate, the two-tier hot path, receipts with
+> merges with this PR: the deterministic gate, the two-tier hot path, receipts with
 > recomputable evidence hashes, the Reppo worker and learned rules, the three
 > web pages, the Attack Lab, and the deploy pipeline. Every claim below
 > carries a verification label — see [Claim verification](#claim-verification).
@@ -77,10 +77,12 @@ Two consequences the comparables do not have:
    answer-length variance to make latency unpredictable.
 2. **Reppo critiques select learned rules that compile into reflex-layer
    questions.** A critique never becomes question text: it selects one
-   operator-promotable question from a fixed catalogue (**PROVEN** offline;
-   model-based distillation is not built). Once promoted, the question rides
-   the same Clef call, so it adds no extra network round-trip (**PROVEN**,
-   one call per request). The loop closes on the hot path after a manual
+   operator-promotable question from a fixed catalogue (**PROVEN** offline —
+   `tests/rules.rs` pins topic selection, quote bounds and the no-rule-on-tie
+   cases; model-based distillation is not built). Once promoted, the question
+   rides the same Clef call, so it adds no extra network round-trip
+   (**PROVEN** — `an_active_rule_rides_the_tier1_call_and_a_firing_rule_holds_with_its_code`
+   in `tests/rules.rs`). The loop closes on the hot path after a manual
    promotion, not automatically. Its latency cost with 8 rules and its value
    on real critiques are **UNPROVEN**.
 
@@ -238,11 +240,13 @@ rules.
 ## Roadmap
 
 Milestones M0–M7 are merged (state, gate, both tiers, receipts, Reppo worker,
-learned rules, the three pages, the deploy pipeline). M8's Attack Lab has
-merged and passed (PR-14); the measured-latency half — `cargo bench` p50/p95
-and the load run behind the two remaining `UNPROVEN` labels — is the only
-roadmap item not yet done. The milestone table, dates, and PRs behind each
-milestone live in [`docs/PLAN.md`](docs/PLAN.md).
+learned rules, the three pages, the deploy pipeline), and M8's Attack Lab has
+merged and passed (PR-14). What remains of M8 is measured evidence: `cargo
+bench` p50/p95 and the load run for the latency and cost rows, and closing or
+explicitly keeping the other three UNPROVEN rows in SPEC §9.1 (compiled-rules
+latency, catalogue coverage, receipt crash survival). The milestone table,
+dates, and PRs behind each milestone live in
+[`docs/PLAN.md`](docs/PLAN.md).
 
 ## Development
 
