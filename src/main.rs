@@ -1,3 +1,4 @@
+use solv::bureau::{Bureau, BureauConfig};
 use solv::state::Store;
 use solv::tier1::{ClefClient, CloudflareClefClient, UnconfiguredClefClient};
 use solv::tier2::{ServClient, ServReasoningClient, UnconfiguredServClient};
@@ -64,7 +65,41 @@ async fn main() {
             std::sync::Arc::new(UnconfiguredServClient)
         }
     };
-    let state = AppState::new(store, tier1, tier2);
+    // The Reppo audit worker attaches only when the operator enabled Reppo
+    // and gave it a key (AGENTS.md: credits are non-renewable, so a key in
+    // `.env` alone must not let the service spend them). The starting
+    // credit budget is explicit: SOLV_REPPO_STARTING_CREDITS, default 0,
+    // which attaches the worker but refuses to queue anything — the
+    // directory reports the live counter and the endpoint returns 402.
+    let bureau = solv::reppo::ReppoHttpClient::from_env().map(|client| {
+        let credits = match std::env::var("SOLV_REPPO_STARTING_CREDITS").ok().as_deref() {
+            None | Some("") => 0,
+            Some(raw) => raw.parse::<u32>().unwrap_or_else(|error| {
+                eprintln!("solv: invalid SOLV_REPPO_STARTING_CREDITS value: {error}");
+                std::process::exit(1);
+            }),
+        };
+        let config = BureauConfig {
+            starting_credits: credits,
+            ..BureauConfig::default()
+        };
+        let (bureau, worker) = Bureau::spawn(
+            std::sync::Arc::new(client),
+            std::sync::Arc::clone(&store),
+            config,
+        );
+        // The worker detaches: it exits on its own when the store drops.
+        drop(worker);
+        println!("solv: reppo audit worker attached ({credits} starting credits)");
+        std::sync::Arc::new(bureau)
+    });
+    if bureau.is_none() {
+        println!(
+            "solv: reppo audit worker not attached (SOLV_REPPO_ENABLED=1 and REPPO_API_KEY required)"
+        );
+    }
+
+    let state = AppState::new(store, tier1, tier2).with_bureau(bureau);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await

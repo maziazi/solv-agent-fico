@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
+use crate::bureau;
 use crate::policy::{
     PreSpendRequest, Tier2Outcome, Tier2Signals, Tier2Verdict, decide, needs_escalation,
 };
@@ -425,5 +426,85 @@ mod tests {
     #[test]
     fn a_call_that_finished_in_time_keeps_its_real_elapsed() {
         assert_eq!(gate_elapsed_ms(1_200, false, 2_000), 1_200);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/audit-counterparty (SPEC §7.2)
+// ---------------------------------------------------------------------------
+
+/// The operator-facing note every 202 carries. It states the two hard
+/// constraints the queue cannot negotiate away (SPEC §5.3).
+const AUDIT_NOTE: &str =
+    "Reppo settles no faster than 10 minutes and accepts one pending evaluation at a time.";
+
+#[derive(Debug, Deserialize)]
+pub struct AuditCounterpartyRequest {
+    pub counterparty_id: String,
+    pub target_url: String,
+    pub claim: String,
+}
+
+/// Queues a counterparty for a Reppo evaluation. Returns 202 with the queue
+/// facts — never a score: an instant verdict from an API whose minimum
+/// settlement window is ten minutes would be a lie (SPEC §5.3).
+///
+/// The worker must be attached (`SOLV_REPPO_ENABLED=1` + `REPPO_API_KEY`):
+/// a 503 here says so plainly instead of pretending to queue anything.
+pub async fn audit_counterparty(
+    State(state): State<AppState>,
+    Json(request): Json<AuditCounterpartyRequest>,
+) -> Response {
+    let Some(worker) = state.bureau() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "audit worker not attached; set SOLV_REPPO_ENABLED=1 with REPPO_API_KEY to enable queueing"
+            })),
+        )
+            .into_response();
+    };
+
+    // SPEC §7.2 names only `counterparty_id`; the bureau stores profiles
+    // under the name the hot path reads, and the two keys must agree (the
+    // guard itself rejects a mismatch).
+    let audit = bureau::AuditRequest {
+        counterparty_id: request.counterparty_id.clone(),
+        counterparty_name: request.counterparty_id,
+        target_url: request.target_url,
+        claim: request.claim,
+    };
+
+    match worker.enqueue(audit) {
+        Ok(enqueued) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "status": "QUEUED",
+                "job_id": enqueued.job_id,
+                "queue_position": enqueued.queue_position,
+                "settlement_minutes": enqueued.settlement_minutes,
+                "estimated_settle_at": iso8601_utc(enqueued.estimated_settle_at_unix),
+                "credits_remaining": enqueued.credits_remaining,
+                "note": AUDIT_NOTE,
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            // Validation and state errors keep their honest families: the
+            // request was malformed (422), the queue refused a conflict
+            // (409), or the operator's credit budget is spent (402).
+            let status = match &error {
+                bureau::EnqueueError::QueueFull | bureau::EnqueueError::AlreadyQueued => {
+                    StatusCode::CONFLICT
+                }
+                bureau::EnqueueError::InsufficientCredits { .. } => StatusCode::PAYMENT_REQUIRED,
+                _ => StatusCode::UNPROCESSABLE_ENTITY,
+            };
+            (
+                status,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response()
+        }
     }
 }

@@ -68,12 +68,32 @@ pub struct LearnedRuleEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ReppoQuota {
-    /// The audit worker is not wired into this server yet: enqueueing is
-    /// impossible, so there are no live credits to report. The frontend
-    /// shows "worker not attached" instead of a meter pinned at zero.
+    /// `true` when the audit worker is wired into this server and the
+    /// credit counter below is live; the frontend then draws the meter.
     pub worker_attached: bool,
     pub credits_remaining: Option<u32>,
     pub quota_total: u32,
+}
+
+impl ReppoQuota {
+    /// The honest empty state: no worker, no credit number — never a
+    /// meter pinned at zero.
+    pub fn not_attached() -> Self {
+        Self {
+            worker_attached: false,
+            credits_remaining: None,
+            quota_total: REPPO_QUOTA_TOTAL,
+        }
+    }
+
+    /// The worker is running and its local credit counter is live.
+    pub fn attached(credits_remaining: u32) -> Self {
+        Self {
+            worker_attached: true,
+            credits_remaining: Some(credits_remaining),
+            quota_total: REPPO_QUOTA_TOTAL,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -84,12 +104,14 @@ pub struct DirectoryPayload {
     pub metrics: metrics::Metrics,
 }
 
-/// Builds the whole payload from store snapshots. Pure and offline.
+/// Builds the whole payload from store snapshots. Pure and offline — the
+/// quota arrives prebuilt by the handler from the live worker, if any.
 pub fn build(
     now_unix: u64,
     profiles: &[(String, Profile)],
     receipts: &[(ReceiptId, Receipt)],
     learned_rules: &[LearnedRule],
+    reppo: ReppoQuota,
 ) -> DirectoryPayload {
     let counterparties = profiles
         .iter()
@@ -99,11 +121,7 @@ pub fn build(
     DirectoryPayload {
         counterparties,
         learned_rules,
-        reppo: ReppoQuota {
-            worker_attached: false,
-            credits_remaining: None,
-            quota_total: REPPO_QUOTA_TOTAL,
-        },
+        reppo,
         metrics: metrics::compute(receipts),
     }
 }
@@ -237,7 +255,13 @@ mod tests {
     #[test]
     fn unrated_says_unrated_and_borrows_no_number() {
         let now = 10 * 86_400;
-        let payload = build(now, &[profile("cp-a", None)], &[], &[]);
+        let payload = build(
+            now,
+            &[profile("cp-a", None)],
+            &[],
+            &[],
+            ReppoQuota::not_attached(),
+        );
         let entry = &payload.counterparties[0];
         assert_eq!(entry.tier, "UNRATED");
         assert_eq!(entry.fico_effective, None);
@@ -254,7 +278,8 @@ mod tests {
             receipt_named("slv_0001", "cp-a", "HOLD"),
             receipt_named("slv_0003", "cp-other", "BLOCK"),
         ];
-        let entry = &build(now, &profiles, &receipts, &[]).counterparties[0];
+        let entry =
+            &build(now, &profiles, &receipts, &[], ReppoQuota::not_attached()).counterparties[0];
         assert_eq!(entry.tier, "PRIME");
         assert_eq!(entry.score_age_days, Some(3));
         let last = entry.last_decision.as_ref().expect("decision recorded");
@@ -277,7 +302,7 @@ mod tests {
                 critique_quote: "service promises a refund no process can grant".to_string(),
             }),
         };
-        let entry = &build(0, &[], &[], &[rule]).learned_rules[0];
+        let entry = &build(0, &[], &[], &[rule], ReppoQuota::not_attached()).learned_rules[0];
         assert_eq!(entry.status, "shadow");
         let as_json = serde_json::to_value(entry).unwrap();
         assert_eq!(as_json["topic"], "guaranteed_refund");
@@ -297,7 +322,7 @@ mod tests {
 
     #[test]
     fn the_quota_reports_no_worker_rather_than_a_zero_meter() {
-        let payload = build(0, &[], &[], &[]);
+        let payload = build(0, &[], &[], &[], ReppoQuota::not_attached());
         let reppo = payload.reppo;
         assert!(!reppo.worker_attached);
         assert_eq!(reppo.credits_remaining, None);
