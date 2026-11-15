@@ -416,11 +416,27 @@ The standard Tier 1 call carries four fixed questions, plus learned rules
 
 1. `answers.injection.probability_true` sits in the uncertain band, between 0.10
    and 0.90; or
-2. `answers.risk_class.confidence < 0.90`; or
-3. `tier == "UNRATED"` (cold start); or
+2. `answers.risk_class.confidence < 0.90`, except that an `UNRATED`
+   counterparty whose `risk_class` is `none` does not escalate on confidence
+   alone (see below); or
+3. (removed) `tier == "UNRATED"` no longer escalates by itself; or
 4. `service_description` exceeds 1,500 characters; or
 5. `amount_usd` exceeds `max_safe_spend` but stays under 2× the cap — a borderline
    case worth thinking about.
+
+**Cold start does not escalate by itself (changed 2026-11-16).** An `UNRATED`
+counterparty is always a forced `HOLD` with `SOLV-COLDSTART-001` (§5.4 row 9),
+whatever Tier 2 says. A clean Tier 1 would therefore spend 3-7 seconds on a
+verdict that cannot change the outcome. Evidence still escalates: an uncertain
+injection probability, a risky `risk_class`, a suspicious span found by the
+local deterministic scan (base64, zero-width and homoglyph layering that Tier 1
+can miss, §8.3), a description over 1,500 characters, a borderline amount, or
+a Tier 1 that failed.
+Guarantees that change: an `UNRATED` receipt for a clean request no longer
+carries a Tier 2 reading of the claim. Guarantees that do not: it is still a
+`HOLD`, `reasons[]` is still populated, `APPROVE` is still unreachable without
+a settled score and a live tier verdict, certain injection still `BLOCK`s, and
+a failed Tier 1 still escalates.
 
 If `answers.injection.probability_true ≥ 0.90`, Tier 2 is **skipped** and the
 decision is `BLOCK` immediately. An obvious injection does not need discussion;
@@ -1024,13 +1040,30 @@ shell under the same CSP; the client router resolves the path. Details in
 | --- | --- | --- |
 | Prompt injection in `service_description` | Prompt-position isolation + `serv_prompt_guard` + the Tier 1 `noul` question | G3 |
 | Indirect injection from target page content | Page content is fetched only on the batch audit path, and still treated as data | G3 |
-| An attacker burning the Reppo quota | `audit-counterparty` is rate-limited per API key; remaining credits are exposed on `/directory` | — |
+| An attacker burning the Reppo quota | `audit-counterparty` requires `Authorization: Bearer $SOLV_ADMIN_TOKEN` (constant-time compare, closed with 401 when no token is set, no detail on which part failed); the credit budget defaults to 0; remaining credits are exposed on `/directory` | — |
+| An attacker burning the Cloudflare and SERV quota through the public gate | `pre-spend-check` is rate limited per client (default 20 requests per minute) and capped in concurrency (default 8 in flight); refusals are `429` with `Retry-After` | — |
 | Denial of service via a giant description | Request size limits; descriptions over 1,500 characters escalate, over 50 KB are rejected | G2 |
 | All AI providers down, so every transaction passes | Fail-closed: the result is `HOLD` | G1 |
 | An old receipt replayed as an approval | The receipt carries `amount_usd` and an evidence hash (both sealed), and a receipt is not an authorisation token — nothing in Solv accepts one as proof of approval. Its `created_at` is **not** covered by the hash (§6.3), so the hash alone does not prove how old a receipt is | G4 |
 | Learned rules poisoned via manipulated critique | Rules are born `shadow`, promotion is manual, the source quote is stored | — |
 | XSS from a counterparty quote on the public receipt page | `quote` is escaped, never rendered as HTML/Markdown, strict CSP | — |
 | A forged score being injected | There is no score-writing endpoint (§3.2) | — |
+
+Settings for the two guards, read once at boot (an invalid value stops the
+boot rather than loosening a guard):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SOLV_RATE_LIMIT_PER_MIN` | `20` | Requests one client may make to `pre-spend-check` in any 60-second window (1 to 10,000). |
+| `SOLV_MAX_CONCURRENT_CHECKS` | `8` | Checks in flight at once across all clients (1 to 1,000). |
+| `SOLV_TRUST_PROXY` | `0` | `1` reads the client address from the **rightmost** `X-Forwarded-For` entry. Use only behind exactly one proxy that appends the address it saw; otherwise the header is attacker-controlled. |
+| `SOLV_ADMIN_TOKEN` | unset | Bearer token for `audit-counterparty`, at least 16 characters. Unset means the endpoint always answers `401`. |
+
+Limits that remain: the limiter is per process and in memory, so it resets on
+restart and is not shared between instances; one IPv6 /64 counts as one client;
+and the tracking table is capped at 10,000 clients, after which unknown clients
+are refused until older windows lapse. `/healthz`, `/api/v1/directory`,
+receipts and the pages are not limited.
 
 ### 8.3 Attack Lab
 
@@ -1074,7 +1107,7 @@ labels. Without a label, the claim must not be written.
 | Blended cost under $0.0005 per check | **UNPROVEN** | The §10 arithmetic is sound, but unmeasured |
 | Attack Lab: zero `APPROVE` on the injection corpus | **PROVEN** | `the_corpus_never_approves_and_every_reason_holds` (`tests/attack.rs`): 20 cases across the six §8.3 categories, zero approvals, span honesty checked per case |
 | Fail-closed: no path to `APPROVE` with all tiers down | **PROVEN** | `all_detectors_down_hold_fail_closed_and_never_approve` (`tests/attack.rs`) drives a full request with both providers failing and asserts HOLD on `SOLV-SYSTEM-003` |
-| Agent lookup (`GET /api/v1/agent/{id}`) cost, no model call | **MEASURED** | 2026-11-16, criterion, in-process router with a profile in state: **2.46 µs** (95% CI 2.45-2.47 µs) per request including axum dispatch and JSON serialisation, against 24.1 µs for the mock `pre-spend-check`. `agent_lookup_offline` in `benches/hot_path.rs`; `tests/agent.rs` uses providers that panic if called, so the no-model-call property is **PROVEN**. Floor only: it excludes the network and TLS, so it is not an end-to-end latency claim |
+| Tier 1 `risk_class` confidence on clean vs attack text | **MEASURED** | 2026-11-16, live Clef-flash, Tier 1 only, 44 calls (`cargo run --release --example tier1_measure`). Clean (12 real-service descriptions x rated/unrated, n=24): confidence min 0.293, p50 0.371, max 0.514, class `none` 23 of 24, **0 of 24 at or above 0.90**. Attack Lab corpus (n=20): confidence min 0.065, p50 0.281, p90 0.758, max 0.789, **0 of 20 at or above 0.90**; injection probability at or above 0.90 on 4 of 20, in 0.10-0.90 on 10, at or below 0.10 on 6 (all six are overclaim, cold-start-pose or encoded text). Clean injection probability max 0.084. Where both answered `none`, attack confidence max 0.282 vs clean min 0.304: a 0.02 gap on small n, too thin to set a threshold. Decision: the 0.90 floor is unchanged (it also gates row 3 BLOCK); only the cold-start escalation rule changed. Corpus is mock-authored and small; calibration is **UNPROVEN** |
 | Gate-side hot-path cost over mock detectors | **MEASURED** | 2026-11-15, n=1000 clean checks in-process: p50 **47 µs**, p95 **58 µs**, max 733 µs per request including axum and serialisation; criterion (default 100 samples per function): state read **52 ns** (budget 200 000 ns), policy gate **153 ns**, full offline request **27 µs**. Commands: `cargo bench` and `cargo run --release --example load_run -- 1000`. Floor only — provider latency is not measured; the end-to-end budget row above stays as it is |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
 | A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |

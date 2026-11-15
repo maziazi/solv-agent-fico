@@ -30,12 +30,12 @@
 //!   content is a G3 surface, so the deferral is deliberate; the reason
 //!   code currently cannot fire. SPEC §8.3's encoding lab covers the
 //!   description path, not this one.
-//! - SPEC §8.2's "audit-counterparty is rate-limited per API key" is not
-//!   implemented — the service has no auth layer yet. The actual safeguard
-//!   is the credit budget: credits are non-renewable, the default budget
-//!   is 0 (every enqueue returns 402 until an operator sets
+//! - SPEC §8.2: `audit-counterparty` requires the `SOLV_ADMIN_TOKEN` bearer
+//!   token and is closed when none is set (`crate::guard`). The credit
+//!   budget remains the last line: credits are non-renewable, the default
+//!   budget is 0 (every enqueue returns 402 until an operator sets
 //!   `SOLV_REPPO_STARTING_CREDITS`), and the reservation math caps the
-//!   damage at the budget. Set a budget only on a network you control.
+//!   damage at the budget.
 //! - `credits_remaining` is a local counter seeded from configuration and
 //!   decremented by the `creditsCharged` Reppo reports. It is advisory:
 //!   Reppo's own `402` is authoritative, and zeroes the counter.
