@@ -1,0 +1,43 @@
+# Solv CD (docs/WORKFLOW.md §4.3): deploys run from a tag, never from a
+# merge; the production environment forces a human approval first; provider
+# credentials travel only from Actions Secrets to platform secrets and are
+# never written to the repository or the image.
+name: cd
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy to production
+    runs-on: ubuntu-latest
+    environment: production        # requires a reviewer to approve
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Push provider secrets from Actions Secrets
+        run: |
+          flyctl secrets set --stage \
+            CLOUDFLARE_ACCOUNT_ID="${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" \
+            CLOUDFLARE_API_TOKEN="${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            SERV_API_KEY="${{ secrets.SERV_API_KEY }}" \
+            REPPO_API_KEY="${{ secrets.REPPO_API_KEY }}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Deploy
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Verify the deployment answers
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "https://${{ vars.FLY_APP_HOST }}/healthz"; then exit 0; fi
+            sleep 5
+          done
+          exit 1

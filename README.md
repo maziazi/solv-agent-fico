@@ -288,6 +288,19 @@ Required environment variables (an `.env.example` ships with PR-01):
 Keys live only in a gitignored `.env` and in GitHub Actions Secrets. They never
 enter this repository.
 
+## Deployment
+
+One tagged release deploys one artefact (docs/WORKFLOW.md §4.3): push a `v*`
+tag, approve the `production` environment in the Actions run, and the `cd`
+workflow builds the release image remotely, pushes provider credentials from
+Actions Secrets to platform secrets (`--stage`, never to the repository), and
+verifies `/healthz` answers before declaring success. Deploys trigger on tags
+only — merging to `main` is never an accidental release.
+
+Required Actions Secrets: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
+`SERV_API_KEY`, `REPPO_API_KEY`, `FLY_API_TOKEN`. Required Actions Variable:
+`FLY_APP_HOST`.
+
 ## Contributing
 
 Commits and PR titles follow

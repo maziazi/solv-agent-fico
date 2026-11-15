@@ -1,0 +1,25 @@
+# Fly.io app definition for the one deployable artefact (docs/WORKFLOW.md
+# §4.3). The app name here is a placeholder; the deploy pins the real one
+# via the flyctl CLI configuration, and credentials never live in this file.
+app = "solv"
+primary_region = "sin"
+
+[build]
+
+[env]
+PORT = "8080"
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = false
+auto_start_machines = true
+
+[http_service.concurrency]
+type = "requests"
+
+[[http_service.checks]]
+interval = "15s"
+timeout = "3s"
+grace_period = "10s"
+path = "/healthz"
