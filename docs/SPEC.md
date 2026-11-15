@@ -212,6 +212,9 @@ Every `pre-spend-check` response writes a receipt carrying `receipt_id`,
 provenance. Receipts are never deleted or altered after creation.
 *Test:* property-based — for every decision, `GET /receipt/:id` returns 200 and
 its hash matches a hash recomputed from the evidence.
+*Scope:* G4 holds across **graceful** restarts only. State is persisted by a
+debounced snapshot (§5.6), so a receipt issued in the last 2 seconds can be
+lost if the process dies without flushing (SIGKILL, OOM, power loss).
 
 **G5 — Every decision has traceable reasons.**
 `reasons[]` is never empty, for `APPROVE` as much as for `BLOCK`. Every element
@@ -585,6 +588,17 @@ Accepted limits: state does not survive beyond one node, there is no
 replication, and its size is bounded by RAM. For the current scope this is
 adequate, and it is stated openly rather than hidden.
 
+Receipt durability, specifically (G4, §3.3):
+
+- A graceful shutdown flushes a final snapshot. A crash (SIGKILL, OOM, power
+  loss) inside the 2-second debounce window loses the receipts issued in that
+  window, even though their `receipt_id` and hash were already returned.
+- Every snapshot rewrites the whole state, so its cost grows with the number of
+  receipts (O(receipts) per snapshot). The size at which this becomes a
+  problem has not been measured — **UNPROVEN**.
+- Planned fix, not built: an append-only receipt journal written per decision,
+  with snapshots reduced to compaction.
+
 ---
 
 ## 6. Decision reasons
@@ -651,8 +665,9 @@ evidence_sha256 = SHA256(canonical_json({
   tier1:            { model, answers, confidences, latency_ms },
   tier2:            { model, reasoning_effort, verdict, guard_triggered, latency_ms } | null,
   rules_applied:    [ rule_id, … ],
-  ruleset_version:  14,
-  policy_config:    { caps, floors },
+  ruleset_version:  1,
+  policy_config:    { caps: { prime_usd, standard_usd, subprime_usd },
+                      block_floor, safety_floor, absolute_cap_usd, latency_ceiling_ms },
   decision:         { decision, reasons, max_safe_spend }
 }))
 ```
@@ -706,7 +721,36 @@ produce. Notes on the shape:
   `null` when Tier 2 did not run — an empty object would pass for an audit.
 - `tier1.answers` and `tier1.confidences` are `null` when the Tier 1 call
   failed.
-- `ruleset_version` is `1` until learned rules (PR-10) make it dynamic.
+- `tier2.verdict` is one of `approve`, `revise`, `mismatch`, `guard_refusal`
+  (`guard_triggered` is `true` only for this one), or `unavailable`.
+  `unavailable` means a call was sent and did not yield a verdict: a timeout
+  against the latency budget, an HTTP error, or an unparsable response. `tier2`
+  is `null` whenever no call was sent — escalation not required, no credentials
+  configured, or no latency budget left; `reasons[]` (for example
+  `SOLV-SYSTEM-003`) tells those apart.
+- `policy_config` is the configuration in force for that decision: `caps`
+  (`prime_usd`, `standard_usd`, `subprime_usd`), `block_floor`, `safety_floor`,
+  `absolute_cap_usd`, `latency_ceiling_ms`.
+- `ruleset_version` is `1` until learned rules (PR-10) make it dynamic. (The
+  `14` in the §5.5 learned-rule example is illustrative, not a value any receipt
+  carries today.)
+
+**What the hash does not cover.** `evidence_sha256` seals the evidence document
+above and nothing else. Outside it: `receipt_id`, `receipt_url`, `created_at`,
+`tier_used`, `latency_ms.state` and `latency_ms.total` (the per-tier latencies
+`tier1.latency_ms` and `tier2.latency_ms` are inside), `tier`, and every
+other field of the response. Consequences, stated plainly:
+
+- A receipt's timestamp is **not** tamper-evident: `created_at` and
+  `receipt_id` can be altered without invalidating the hash, so the hash alone
+  cannot prove *when* a decision was made. The only time-bearing fields inside
+  it describe the evidence (`profile_snapshot.settled_at` and `age_days`), not
+  the decision.
+- It does prove what the decision rested on: the amount, the target, the score
+  snapshot, the tier signals, the policy in force, and the verdict with its
+  reasons.
+- Tamper evidence for the whole receipt, including its time and id, would need
+  a signature or a hash chain over the full record. That is not built.
 
 ---
 
@@ -750,7 +794,7 @@ Response:
   "tier_used": ["clef-flash", "serv-reasoning"],
   "latency_ms": { "state": 0, "tier1": 44, "tier2": 612, "total": 671 },
   "reasons": [ { "code": "SOLV-INJECTION-001", "…": "…" } ],
-  "ruleset_version": 14,
+  "ruleset_version": 1,
   "evidence_sha256": "…",
   "receipt_url": "/receipt/slv_01HQ…"
 }
@@ -817,7 +861,7 @@ The pre-spend simulator: three preset scenarios and one custom form. Details in
 | An attacker burning the Reppo quota | `audit-counterparty` is rate-limited per API key; remaining credits are exposed on `/directory` | — |
 | Denial of service via a giant description | Request size limits; descriptions over 1,500 characters escalate, over 50 KB are rejected | G2 |
 | All AI providers down, so every transaction passes | Fail-closed: the result is `HOLD` | G1 |
-| An old receipt replayed as an approval | The receipt carries `amount_usd`, a timestamp, and an evidence hash; a receipt is not an authorisation token | G4 |
+| An old receipt replayed as an approval | The receipt carries `amount_usd` and an evidence hash (both sealed), and a receipt is not an authorisation token — nothing in Solv accepts one as proof of approval. Its `created_at` is **not** covered by the hash (§6.3), so the hash alone does not prove how old a receipt is | G4 |
 | Learned rules poisoned via manipulated critique | Rules are born `shadow`, promotion is manual, the source quote is stored | — |
 | XSS from a counterparty quote on the public receipt page | `quote` is escaped, never rendered as HTML/Markdown, strict CSP | — |
 | A forged score being injected | There is no score-writing endpoint (§3.2) | — |
@@ -864,6 +908,8 @@ labels. Without a label, the claim must not be written.
 | Blended cost under $0.0005 per check | **UNPROVEN** | The §10 arithmetic is sound, but unmeasured |
 | Attack Lab: zero `APPROVE` on the injection corpus | **UNPROVEN** | Becomes PROVEN once PR-14 merges |
 | Fail-closed: no path to `APPROVE` with all tiers down | **UNPROVEN** | Becomes PROVEN once the G1 test exists |
+| A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
+| Every issued receipt survives a crash | **UNPROVEN** | Not true inside the 2-second snapshot window (§5.6); the snapshot cost at scale is unmeasured |
 | "40x cheaper inference" | **WITHDRAWN** | See §10.3. The correct figures are ~9x blended and ~128x per hot-path call. The 40x claim must not be used. |
 
 ---
