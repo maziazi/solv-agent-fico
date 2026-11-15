@@ -541,11 +541,13 @@ fn parse_verdicts(result: &Value) -> Result<Vec<CriterionVerdict>, ReppoError> {
 
 /// Maps the per-criterion verdicts back onto the four pillars.
 ///
-/// Matched by the exact criterion text Solv sent; when Reppo has reworded
-/// them but still returned exactly four, order is trusted (the reference
-/// says verdicts "follow your criteria"). Any other count cannot be
-/// attributed to pillars and is refused — guessing which score is Safety
-/// would let a hijack attempt through or block an honest party.
+/// Matched by the exact criterion text Solv sent. Position is only a last
+/// resort for a response that reworded *every* criterion yet still returned
+/// exactly four (the reference says verdicts "follow your criteria"). A
+/// partial match is refused: when some questions are recognised and others
+/// are not, completing the rest by position could give the Safety score to
+/// the wrong question, letting a hijack attempt through or blocking an
+/// honest party. Any other count cannot be attributed at all.
 ///
 /// Fractional scores are floored, never rounded up: a Safety score of 3.5
 /// must not become 4 and slip past the `≤ 3` hard gate (SPEC §5.4). A
@@ -556,10 +558,17 @@ fn map_pillars(verdicts: &[CriterionVerdict]) -> Result<Pillars, ReppoError> {
         .iter()
         .map(|criterion| verdicts.iter().find(|v| v.criterion == *criterion))
         .collect();
-    let ordered: Vec<&CriterionVerdict> = if by_text.iter().all(Option::is_some) {
+    let matched = by_text.iter().flatten().count();
+    let ordered: Vec<&CriterionVerdict> = if matched == PILLAR_CRITERIA.len() {
         by_text.into_iter().flatten().collect()
-    } else if verdicts.len() == PILLAR_CRITERIA.len() {
+    } else if matched == 0 && verdicts.len() == PILLAR_CRITERIA.len() {
         verdicts.iter().collect()
+    } else if matched > 0 {
+        return Err(ReppoError::Parse(format!(
+            "only {matched} of {} pillar criteria were recognised; \
+             refusing to guess the rest by position",
+            PILLAR_CRITERIA.len()
+        )));
     } else {
         return Err(ReppoError::Parse(format!(
             "expected {} pillar verdicts, got {}",

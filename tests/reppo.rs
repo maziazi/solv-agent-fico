@@ -638,6 +638,39 @@ async fn a_chunked_body_without_a_length_is_cut_off_at_the_limit() {
     assert!(message.contains("exceeds"), "{message}");
 }
 
+#[test]
+fn a_partial_criterion_match_is_refused_not_completed_by_position() {
+    // Position is a last resort for a response that reworded *every*
+    // criterion. When some match and others do not, guessing the rest by
+    // position could hand the Safety score to the wrong question.
+    let mut one_reworded = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
+    one_reworded["result"]["verdicts"][2]["criterion"] = json!("reworded by reppo");
+    assert!(matches!(
+        parse_status_response(&one_reworded),
+        Err(ReppoError::Parse(_))
+    ));
+
+    // Four verdicts, but two share a criterion and another question has no
+    // answer: three distinct matches, not four.
+    let mut duplicated = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
+    duplicated["result"]["verdicts"][3]["criterion"] = json!(PILLAR_CRITERIA[0]);
+    assert!(matches!(
+        parse_status_response(&duplicated),
+        Err(ReppoError::Parse(_))
+    ));
+
+    // An extra verdict beside four matching ones is harmless.
+    let mut extra = settled_body(json!(60), [5.0, 6.0, 2.0, 8.0]);
+    extra["result"]["verdicts"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "criterion": "something Reppo added", "score": 1, "critique": "" }));
+    let EvalStatus::Settled(settled) = parse_status_response(&extra).unwrap() else {
+        panic!("expected Settled");
+    };
+    assert_eq!(settled.pillars.safety, 2);
+}
+
 /// Hits the real Reppo Evaluation API through the whole worker path:
 /// enqueue, submit, wait out the 10-minute window, poll to `SETTLED`, and
 /// confirm the profile gained a score. Never runs in `cargo test`.
