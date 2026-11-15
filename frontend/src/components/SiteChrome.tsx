@@ -8,7 +8,7 @@
 // The desk lives at /desk, not at /. The form is the product's demo, not its
 // front door.
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useState } from "react";
 import type { JSX } from "react";
 import { Link, NavLink } from "react-router-dom";
 
@@ -17,37 +17,9 @@ import { SolvMark } from "./Logo";
 interface NavItem {
   label: string;
   to: string;
-  /** Second-level links: a dropdown on desktop, inline in the drawer. */
-  children?: { label: string; to: string; blurb: string }[];
 }
 
 const NAV: NavItem[] = [
-  {
-    label: "Product",
-    to: "/how-it-works",
-    children: [
-      {
-        label: "Pre-spend gate",
-        to: "/how-it-works#gate",
-        blurb: "APPROVE, HOLD or BLOCK, with reasons",
-      },
-      {
-        label: "Counterparty registry",
-        to: "/how-it-works#registry",
-        blurb: "Independent evaluation, five bands, age decay",
-      },
-      {
-        label: "Learned guardrails",
-        to: "/how-it-works#rules",
-        blurb: "Critiques become shadow rules",
-      },
-      {
-        label: "Attack Lab",
-        to: "/attack-lab",
-        blurb: "Six attack categories, 20 cases, zero approvals",
-      },
-    ],
-  },
   { label: "How it works", to: "/how-it-works" },
   { label: "See it work", to: "/proof" },
   { label: "Explorer", to: "/explorer" },
@@ -66,76 +38,6 @@ function navLinkClass({ isActive }: { isActive: boolean }): string {
   }`;
 }
 
-function ProductMenu(): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const menuId = useId();
-  const wrapper = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: PointerEvent) {
-      if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  const item = NAV[0];
-
-  return (
-    <div ref={wrapper} className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={menuId}
-        onClick={() => setOpen((was) => !was)}
-        className={`${linkBase} flex items-center gap-1 text-muted`}
-      >
-        {item.label}
-        <svg aria-hidden width="10" height="10" viewBox="0 0 10 10" fill="none">
-          <path
-            d="M2 3.5 5 6.5 8 3.5"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
-      {open && (
-        <div
-          id={menuId}
-          className="absolute left-0 top-full z-20 mt-3 w-80 rounded-xl border border-border bg-surface p-2 shadow-lg shadow-ink/5"
-        >
-          <ul>
-            {item.children?.map((child) => (
-              <li key={child.to}>
-                <Link
-                  to={child.to}
-                  onClick={() => setOpen(false)}
-                  className="block rounded-lg px-3 py-2 hover:bg-wash focus-visible:bg-wash"
-                >
-                  <span className="text-sm font-semibold">{child.label}</span>
-                  <span className="mt-0.5 block text-xs text-muted">
-                    {child.blurb}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
 const PRIMARY_BUTTON =
   "rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-bg transition-opacity hover:opacity-90";
 
@@ -146,7 +48,7 @@ export function SiteHeader(): JSX.Element {
   const closeDrawer = () => setDrawerOpen(false);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-bg/90 backdrop-blur">
+    <header className="sticky top-0 z-30 bg-wash">
       <div className="wrap flex items-center gap-6 py-3.5">
         <Link to="/" className="flex items-center gap-2.5" aria-label="Solv, home">
           <span className="text-accent">
@@ -156,8 +58,7 @@ export function SiteHeader(): JSX.Element {
         </Link>
 
         <nav aria-label="main" className="ml-4 hidden items-center gap-6 lg:flex">
-          <ProductMenu />
-          {NAV.slice(1).map((item) => (
+          {NAV.map((item) => (
             <NavLink key={item.to} to={item.to} className={navLinkClass}>
               {item.label}
             </NavLink>
@@ -173,7 +74,7 @@ export function SiteHeader(): JSX.Element {
             aria-expanded={drawerOpen}
             aria-controls="mobile-nav"
             onClick={() => setDrawerOpen((was) => !was)}
-            className="rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-xs lg:hidden"
+            className="rounded-lg bg-surface px-3 py-1.5 font-mono text-xs lg:hidden"
           >
             {drawerOpen ? "close" : "menu"}
           </button>
@@ -184,13 +85,13 @@ export function SiteHeader(): JSX.Element {
         <nav
           id="mobile-nav"
           aria-label="main, mobile"
-          className="border-t border-border bg-surface lg:hidden"
+          className="bg-surface lg:hidden"
         >
           <ul className="wrap py-2">
             {NAV.map((item) => (
               <li
                 key={item.label}
-                className="border-b border-border last:border-0"
+                className=""
               >
                 <NavLink
                   to={item.to}
@@ -199,21 +100,6 @@ export function SiteHeader(): JSX.Element {
                 >
                   {item.label}
                 </NavLink>
-                {item.children && (
-                  <ul className="pb-2 pl-4">
-                    {item.children.map((child) => (
-                      <li key={child.to}>
-                        <Link
-                          to={child.to}
-                          onClick={closeDrawer}
-                          className="block py-1.5 text-sm text-muted"
-                        >
-                          {child.label}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </li>
             ))}
             <li className="py-3">
@@ -244,7 +130,7 @@ const FOOTER_LINKS: { label: string; to: string }[] = [
 
 export function SiteFooter(): JSX.Element {
   return (
-    <footer className="mt-20 border-t border-border bg-wash">
+    <footer className="mt-20 bg-wash">
       <div className="wrap py-10">
         <div className="flex items-center gap-2.5">
           <span className="text-accent">

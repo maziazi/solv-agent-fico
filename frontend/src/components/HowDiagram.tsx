@@ -117,15 +117,16 @@ const AUDIT_LANE: Step[] = [
   },
 ];
 
-function TimeBadge({ step }: { step: Step }): JSX.Element {
+function TimeBadge({ step, onInk }: { step: Step; onInk: boolean }): JSX.Element {
   const measured = step.kind === "measured";
+  const tone = measured
+    ? "bg-approve-solid text-white"
+    : onInk
+      ? "bg-bg text-ink"
+      : "bg-wash text-ink";
   return (
     <span
-      className={`mt-auto inline-flex w-fit items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 font-mono text-xs ${
-        measured
-          ? "border-approve-ink/40 bg-approve-bg text-approve-ink"
-          : "border-border bg-wash text-muted"
-      }`}
+      className={`mt-auto inline-flex w-fit items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 font-mono text-xs ${tone}`}
     >
       {measured && <span className="font-semibold">MEASURED</span>}
       {step.time}
@@ -133,36 +134,39 @@ function TimeBadge({ step }: { step: Step }): JSX.Element {
   );
 }
 
+// Provider steps are the one emphasis fill (solid ink); everything else is the
+// neutral card. No borders, no tints: contrast comes from the fill alone.
 function StepCard({ step, index }: { step: Step; index: number }): JSX.Element {
   const provider = step.who === "provider";
+  const body = provider ? "text-bg" : "text-muted";
   return (
     <div
-      className={`flex h-full flex-col gap-3 rounded-xl border bg-surface p-4 ${
-        provider ? "border-accent border-t-4" : "border-border"
+      className={`flex h-full flex-col gap-3 rounded-xl p-4 ${
+        provider ? "bg-ink text-bg" : "bg-surface"
       }`}
     >
       <div className="flex items-center justify-between">
         <span
           className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-            provider ? "bg-accent-soft text-accent-ink" : "bg-wash text-ink"
+            provider ? "bg-accent-fill text-white" : "bg-wash text-ink"
           }`}
         >
           {step.icon}
         </span>
-        <span className="font-mono text-xs text-muted">
+        <span className={`font-mono text-xs ${body}`}>
           {String(index + 1).padStart(2, "0")}
         </span>
       </div>
       <div>
         {step.provider && (
-          <p className="font-mono text-[0.7rem] font-medium uppercase tracking-wide text-accent-ink">
+          <p className="font-mono text-[0.7rem] font-medium uppercase tracking-wide text-bg">
             {step.provider}
           </p>
         )}
         <h3 className="mt-0.5 text-base font-semibold leading-snug">{step.title}</h3>
       </div>
-      <p className="text-sm text-muted">{step.body}</p>
-      <TimeBadge step={step} />
+      <p className={`text-sm ${body}`}>{step.body}</p>
+      <TimeBadge step={step} onInk={provider} />
     </div>
   );
 }
@@ -179,7 +183,7 @@ function Lane({
   columns: "lg:grid-cols-5" | "lg:grid-cols-4";
 }): JSX.Element {
   return (
-    <div className="rounded-2xl border border-border bg-wash/60 p-4 sm:p-6">
+    <div className="rounded-2xl bg-wash p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="text-lg font-bold">{label}</h3>
         <p className="text-sm text-muted">{caption}</p>
@@ -216,15 +220,15 @@ export function HowDiagram(): JSX.Element {
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted">
         <span className="flex items-center gap-2">
-          <span className="inline-block h-3 w-6 rounded-sm border border-accent border-t-4 bg-surface" />
+          <span className="inline-block h-3 w-6 rounded-sm bg-ink" />
           Outside service
         </span>
         <span className="flex items-center gap-2">
-          <span className="inline-block h-3 w-6 rounded-sm border border-border bg-surface" />
+          <span className="inline-block h-3 w-6 rounded-sm bg-bg" />
           Solv code
         </span>
         <span className="flex items-center gap-2">
-          <span className="rounded-full border border-approve-ink/40 bg-approve-bg px-2 font-mono text-xs font-semibold text-approve-ink">
+          <span className="rounded-full bg-approve-solid px-2 font-mono text-xs font-semibold text-white">
             MEASURED
           </span>
           from live runs, small samples
@@ -242,11 +246,11 @@ export function HowDiagram(): JSX.Element {
         aria-hidden
         className="flex items-center justify-center gap-3 py-3 text-sm text-muted"
       >
-        <span className="h-6 border-l-2 border-dashed border-accent" />
+        <span className="h-6" />
         <span className="max-w-xl text-center">
           The gate reads the score profile on every check. Reppo is never called here.
         </span>
-        <span className="h-6 border-l-2 border-dashed border-accent" />
+        <span className="h-6" />
       </div>
 
       <Lane
