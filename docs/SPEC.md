@@ -993,8 +993,8 @@ labels. Without a label, the claim must not be written.
 | Reppo: 10-minute minimum, 1 pending evaluation | **CITED** | Reppo API docs |
 | Solv Tier 1 path p95 ≤ 200 ms end to end | **UNPROVEN** | Needs `cargo bench` + a load run |
 | Blended cost under $0.0005 per check | **UNPROVEN** | The §10 arithmetic is sound, but unmeasured |
-| Attack Lab: zero `APPROVE` on the injection corpus | **UNPROVEN** | Becomes PROVEN once PR-14 merges |
-| Fail-closed: no path to `APPROVE` with all tiers down | **UNPROVEN** | Becomes PROVEN once the G1 test exists |
+| Attack Lab: zero `APPROVE` on the injection corpus | **PROVEN** | `the_corpus_never_approves_and_every_reason_holds` (`tests/attack.rs`): 20 cases across the six §8.3 categories, zero approvals, span honesty checked per case |
+| Fail-closed: no path to `APPROVE` with all tiers down | **PROVEN** | `all_detectors_down_hold_fail_closed_and_never_approve` (`tests/attack.rs`) drives a full request with both providers failing and asserts HOLD on `SOLV-SYSTEM-003` |
 | A receipt's `evidence_sha256` can be recomputed by a third party | **PROVEN** | `g4_every_decision_has_a_receipt_whose_hash_recomputes` and `arbitrary_floats_print_exactly_as_python_does` in `tests/receipt.rs` run `tools/recompute_receipt.py` (Python stdlib) as the verifier, over arbitrary floats, unicode, and failed tiers |
 | A Reppo critique never becomes Clef question text | **PROVEN** | `hostile_critique_text_never_appears_in_a_question_or_the_request` and `the_stored_quote_is_bounded_and_stripped_of_control_characters` in `tests/rules.rs`; the question wording comes only from the fixed catalogue |
 | Topic selection ignores negated and embedded keywords, and a tie makes no rule | **PROVEN** | `keywords_match_on_word_boundaries_not_inside_other_words`, `a_negated_keyword_does_not_select_its_topic`, `a_tie_between_topics_creates_no_rule_and_is_counted` in `tests/rules.rs`; the two-word negation window is a stated limit, pinned by `negation_reaches_only_two_words_back` |
