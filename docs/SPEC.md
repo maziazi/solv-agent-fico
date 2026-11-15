@@ -937,10 +937,14 @@ metrics: distribution of tiers used, p50/p95 latency per path, cost per check,
 Reppo credits remaining. Metrics are computed from real receipts, never from
 constants.
 
-### 7.5 `GET /`
+### 7.5 Frontend routes
 
-The pre-spend simulator: three preset scenarios and one custom form. Details in
-`docs/DESIGN.md`.
+*(2026-11-15, Frontend v2):* `/` holds the landing page; the pre-spend
+simulator lives at `/desk`; the registry and receipts live at `/explorer` (the
+old `/bureau` deep link redirects there); `/how-it-works`, `/docs`, `/pricing`,
+and `/attack-lab` carry the explanatory pages. Every route serves the same SPA
+shell under the same CSP; the client router resolves the path. Details in
+`docs/DESIGN.md` and `docs/FRONTEND-V2.md`.
 
 ---
 

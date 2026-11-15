@@ -147,7 +147,16 @@ next. *(2026-11-15: with the third page live, a minimal header nav — desk,
 bureau — was added at the owner's direction for cross-page discoverability;
 forward links stay, and the header stays to two words.)*
 
-### 4.1 `/` — The Underwriting Desk
+### 4.0 Routing (Frontend v2, 2026-11-15)
+
+The navbar is the sitemap: Product ▾ · How it works · Explorer · Docs · Pricing
+· Try the desk. `/` holds the landing page; the desk lives at `/desk` (a form
+is the demo, not the front door); the registry and receipts live at
+`/explorer` — the word "bureau" read as institutional jargon and was retired
+from the UI, with `/bureau` kept as a redirect so existing links survive. Every
+route serves the same embedded shell under the same CSP.
+
+### 4.1 `/desk` — The Underwriting Desk
 
 The simulator. A visitor must understand what Solv does within five seconds of
 landing, without reading a paragraph.
