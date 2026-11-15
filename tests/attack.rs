@@ -48,7 +48,7 @@ struct Case {
     target_url: String,
     amount_usd: f64,
     description: String,
-    /// Overclaim cases carry a settled PRIME profile so the cold-start row
+    /// Overclaim cases carry a settled top-band profile so the cold-start row
     /// (which would mask the mismatch row) does not fire for them.
     #[serde(default)]
     seed_profile: Option<SeedProfile>,

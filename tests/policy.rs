@@ -189,6 +189,19 @@ fn row5_low_safety_pillar_blocks() {
 }
 
 #[test]
+fn the_block_boundary_crosses_exactly_at_the_fair_floor() {
+    // 580 is both the FAIR band floor and the block floor: one Reppo point
+    // apart, the gate must change rows — and only there. 50.5 → FICO 578
+    // (POOR, blocks); 50.9 → FICO 580 (FAIR, approves at a small amount).
+    let below = profile(Some(settled(50.5, 9, 3)));
+    let at = profile(Some(settled(50.9, 9, 3)));
+    let below_decision = run(&request(2.0), Some(&below), &tier1_clean(), None, &[], 10);
+    let at_decision = run(&request(2.0), Some(&at), &tier1_clean(), None, &[], 10);
+    assert_eq!(below_decision.reasons[0].code, ReasonCode::Score001);
+    assert_eq!(at_decision.reasons[0].code, ReasonCode::Score010);
+}
+
+#[test]
 fn row6_score_below_block_floor_blocks() {
     let profile = profile(Some(settled(20.0, 9, 3)));
     let decision = run(
@@ -358,7 +371,7 @@ fn row11_tier2_mismatch_holds() {
 }
 
 #[test]
-fn row12_clean_prime_approves_with_reasons() {
+fn row12_clean_good_band_approves_with_reasons() {
     let decision = clean_case(50.0);
     assert_eq!(decision.kind, DecisionKind::Approve);
     assert_eq!(decision.tier, Tier::Good);
@@ -672,7 +685,7 @@ fn non_positive_amounts_are_refused() {
 #[test]
 fn fired_hold_rule_stays_visible_when_another_row_holds() {
     // Tier cap (row 10) holds first; the learned rule must still appear.
-    let profile = profile(Some(settled(67.0, 9, 3))); // FAIR, cap 5, cap 100
+    let profile = profile(Some(settled(67.0, 9, 3))); // FAIR, cap 5
     let rules = vec![FiredRule {
         rule_id: "015".to_string(),
         effect: RuleEffect::ForcedHold,

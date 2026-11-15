@@ -135,7 +135,7 @@ moves the money.
   "fico_raw": 410,
   "decay": 0,
   "score_age_days": 3,
-  "tier": "HIGH_RISK",
+  "tier": "POOR",
   "max_safe_spend": 0.0,
   "pillars": { "reliability": 3, "track_record": 2, "safety": 2, "maturity": 4 },
   "score_source": {
@@ -193,6 +193,11 @@ every receipt.
 The tiers are the published FICO band boundaries (580 / 670 / 740 / 800), so
 they can be checked against a public reference. They are **not calibrated
 against outcomes** — nothing in Solv yet proves these bands predict fraud.
+
+The band boundaries are the published FICO boundaries, not boundaries
+calibrated against outcomes: nothing in Solv yet proves a `GOOD` counterparty
+defrauds less often than a `FAIR` one. The bands make the numbers checkable,
+not predictive.
 
 No actor — not the operator, not Reppo, not an API caller — can write a FICO
 score directly. There is no endpoint for it. That is what makes the number on a

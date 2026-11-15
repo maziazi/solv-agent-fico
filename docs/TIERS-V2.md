@@ -1,9 +1,13 @@
 # Tiers v2 — five FICO-aligned bands
 
 Status: **IMPLEMENTED** (this PR). `src/score.rs`, the policy gate, the
-receipt page, the tests, and SPEC §4.3 now follow this document; the reason
-for the §4.3 change is recorded there and in the PR description, per
-AGENTS.md (the score mapping is a public promise printed on every receipt).
+tests, and SPEC §4.3 (with the required reason) now follow this document;
+the desk's badge and gauge follow it too. Two deliberate deviations, stated:
+old receipts issued before the change render their sealed tier string as
+`TIER UNKNOWN` on the public page (the API JSON keeps the sealed string; the
+page refuses to re-dress vocabulary the bands no longer define), and the
+§6 calibration paragraph now lives in SPEC §4.2/§11 with the rest of the
+not-yet-proven claims.
 
 Goal: replace the four ad-hoc bands with five bands whose boundaries are the
 published FICO boundaries, and give each band a consequence that is enforced by

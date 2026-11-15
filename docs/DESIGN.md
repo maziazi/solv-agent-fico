@@ -254,7 +254,7 @@ pass rate instead — a real number with a real denominator.
 | **Pipeline node** | Row: name (Inter), elapsed ms (mono, right-aligned), state glyph, optional detail. Skipped nodes are `#5C5B57` with their reason. |
 | **Reason row** | Code (mono `micro`), message (Inter `body`), effect chip, evidence block if present |
 | **Evidence block** | `#F8F7F4` fill, 1px dashed border, mono, prefixed by the label `untrusted counterparty text` |
-| **FICO gauge** | Horizontal track 300→850, tick marks at the four tier floors (550, 640, 720), filled to `fico_effective`, `fico_raw` marked with a hairline when decay is nonzero |
+| **FICO gauge** | Horizontal track 300→850, tick marks at the four band floors (580, 670, 740, 800), filled to `fico_effective`, `fico_raw` marked with a hairline when decay is nonzero |
 | **Primary button** | `#A8431F` fill, white text, 1px darker border |
 | **Focus ring** | 2px `#D95D39` offset 2px. Never removed. |
 
